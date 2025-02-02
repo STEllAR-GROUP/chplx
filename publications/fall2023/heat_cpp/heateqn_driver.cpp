@@ -8,27 +8,33 @@
 
 using namespace heateqn;
 
-int hpx_main(int argc, char * argv[]) {
+int hpx_main(int argc, char* argv[])
+{
     heateqn::__this->__main();
     return hpx::finalize();
 }
 
-int main(int argc, char * argv[]) {
+int main(int argc, char* argv[])
+{
     chplx::registerModule<heateqn::__thisModule>();
     hpx::program_options::options_description options;
+    // clang-format off
     options.add_options()
-        ("ghosts",
-            hpx::program_options::value(&heateqn::ghosts), "config const ghosts : std::int64_t")
-        ("k",
-            hpx::program_options::value(&heateqn::k), "config const k : double")
-        ("dt",
-            hpx::program_options::value(&heateqn::dt), "config const dt : double")
-        ("dx",
-            hpx::program_options::value(&heateqn::dx), "config const dx : double")
-        ("nx",
-            hpx::program_options::value(&heateqn::nx), "config const nx : std::int64_t")
-        ("nt",
-            hpx::program_options::value(&heateqn::nt), "config const nt : std::int64_t");
+        ("ghosts", hpx::program_options::value(&heateqn::ghosts),
+            "config const ghosts : std::int64_t")
+        ("k", hpx::program_options::value(&heateqn::k),
+            "config const k : double")
+        ("dt", hpx::program_options::value(&heateqn::dt),
+            "config const dt : double")
+        ("dx", hpx::program_options::value(&heateqn::dx),
+            "config const dx : double")
+        ("nx", hpx::program_options::value(&heateqn::nx),
+            "config const nx : std::int64_t")
+        ("nt", hpx::program_options::value(&heateqn::nt),
+            "config const nt : std::int64_t")
+        ("fork_join", hpx::program_options::value(&heateqn::fork_join),
+            "config const fork_join : int");
+    // clang-format on
     hpx::init_params init_args;
     init_args.desc_cmdline = options;
     return hpx::init(argc, argv, init_args);

@@ -3,44 +3,64 @@
 //
 #include "heateqn.hpp"
 
+#include <hpx/execution.hpp>
+
 namespace heateqn {
 
-    struct __thisModule *__this = nullptr;
+    struct __thisModule* __this = nullptr;
 
-    
-        void __thisModule::update(chplx::Array<double, chplx::Domain<1> > & d,chplx::Array<double, chplx::Domain<1> > & d2) {
-                auto NX = nx + 1;
-                chplx::forall(chplx::Range{1,NX - 1}, [&](auto i) {
-                        d2(i) = d(i) + ( ( ( dt * k ) / ( dx * dx ) ) * ( ( d(1 + i) + d(1 - i) ) - ( 2 * d(i) ) ) );
-        });
-                d2(0) = d2(1 - NX);
-                d2(NX) = d2(1);
+    void __thisModule::update(chplx::Array<double, chplx::Domain<1>>& d,
+        chplx::Array<double, chplx::Domain<1>>& d2)
+    {
+        auto NX = nx + 1;
+        auto loop_body = [&](auto i) {
+            d2(i) = d(i) +
+                (((dt * k) / (dx * dx)) * ((d(1 + i) + d(i - 1)) - (2 * d(i))));
+        };
+        if (fork_join)
+        {
+            chplx::forall(hpx::execution::par.on(*exec),
+                HPX_CURRENT_SOURCE_LOCATION(), chplx::Range{1, NX - 1},
+                std::move(loop_body));
+        }
+        else
+        {
+            chplx::forall(hpx::execution::par, HPX_CURRENT_SOURCE_LOCATION(),
+                chplx::Range{1, NX - 1}, std::move(loop_body));
+        }
+        //                d2(0) = d2(NX - 1);
+        //                d2(NX) = d2(1);
     };
 
-        std::int64_t ghosts = 1;
-        double k = 0.400000;
-        double dt = 1.000000;
-        double dx = 1.000000;
-        std::int64_t nx = 1000000;
-        std::int64_t nt = 100;
+    std::int64_t ghosts = 1;
+    double k = 0.400000;
+    double dt = 1.000000;
+    double dx = 1.000000;
+    std::int64_t nx = 1000000;
+    std::int64_t nt = 100;
+    int fork_join = 0;
 
-    void __thisModule::__main() {
+    void __thisModule::__main()
+    {
+        if (fork_join)
+            exec = new hpx::execution::experimental::fork_join_executor();
 
         auto NX = nx - 1;
-        chplx::Array<double, chplx::Domain<1> > data(chplx::Range(0, NX));
-        chplx::Array<double, chplx::Domain<1> > data2(chplx::Range(0, NX));
-        chplx::forall(chplx::Range{0,NX}, [&](auto i) {
-                data(i) = 1 + ( ( ( i - 1 ) + nx ) % nx );
-                data2(i) = 0;
-    });
+        chplx::Array<double, chplx::Domain<1>> data(chplx::Range(0, NX));
+        chplx::Array<double, chplx::Domain<1>> data2(chplx::Range(0, NX));
+        chplx::forall(chplx::Range{0, NX}, [&](auto i) {
+            data(i) = 1 + (((i - 1) + nx) % nx);
+            data2(i) = 0;
+        });
         hpx::chrono::high_resolution_timer t;
-        chplx::forLoop(chplx::Range{1,nt}, [&](auto t) {
-                update(data, data2);
-    });
+        chplx::forLoop(
+            chplx::Range{1, nt}, [&](auto t) { update(data, data2); });
         const auto elapsed = t.elapsed();
-        std::cout << "chapelng," << nx << "," << nt << "," << hpx::resource::get_num_threads() << "," << dt << "," << dx << "," << elapsed << ",0\n";
+        std::cout << "chapelng," << nx << "," << nt << ","
+                  << hpx::resource::get_num_threads() << "," << dt << "," << dx
+                  << "," << elapsed << ",0\n";
 
-
+        delete exec;
     }
 
-} // end namespace
+}    // namespace heateqn

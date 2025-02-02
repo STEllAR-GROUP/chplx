@@ -7,10 +7,14 @@
 #define __HEATEQN_HPP__
 
 #include <chplx.hpp>
-#include <iostream>
+
+#include <hpx/execution.hpp>
+
 #include <functional>
+#include <iostream>
+
 namespace heateqn {
-    extern struct __thisModule *__this;
+    extern struct __thisModule* __this;
 
     extern std::int64_t ghosts;
     extern double k;
@@ -18,23 +22,30 @@ namespace heateqn {
     extern double dx;
     extern std::int64_t nx;
     extern std::int64_t nt;
+    extern int fork_join;
 
+    struct __thisModule
+    {
+        void update(chplx::Array<double, chplx::Domain<1>>& d,
+            chplx::Array<double, chplx::Domain<1>>& d2);
 
-    struct __thisModule {
+        static void __construct()
+        {
+            heateqn::__this = new __thisModule();
+        }
 
-                void update(chplx::Array<double, chplx::Domain<1> > & d,chplx::Array<double, chplx::Domain<1> > & d2);
-
-        static void __construct() { heateqn::__this = new __thisModule(); }
-
-        static void __destruct() noexcept {
-            auto *m = heateqn::__this;
+        static void __destruct() noexcept
+        {
+            auto* m = heateqn::__this;
             heateqn::__this = nullptr;
             delete m;
         }
 
         void __main();
-    }; // end struct __thisModule
 
-} // end namespace
+        hpx::execution::experimental::fork_join_executor* exec = nullptr;
+    };    // end struct __thisModule
+
+}    // namespace heateqn
 
 #endif
