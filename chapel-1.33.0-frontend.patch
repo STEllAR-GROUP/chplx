@@ -1,5 +1,5 @@
 diff --git a/frontend/CMakeLists.txt b/frontend/CMakeLists.txt
-index d4248b70e9..6301e3fab3 100644
+index ad620f38ae..ae36cb035d 100644
 --- a/frontend/CMakeLists.txt
 +++ b/frontend/CMakeLists.txt
 @@ -15,7 +15,11 @@
@@ -15,13 +15,18 @@ index d4248b70e9..6301e3fab3 100644
  # CHPL_HOME may have been defined by an upstream CMakeLists.txt, so check if
  # it doesn't exist before trying to create it.
  if (NOT DEFINED CHPL_HOME)
-@@ -76,15 +80,18 @@ set(CHPL_INCLUDE_DIR      ${CMAKE_CURRENT_BINARY_DIR}/include)
+@@ -76,19 +80,18 @@ set(CHPL_INCLUDE_DIR      ${CMAKE_CURRENT_BINARY_DIR}/include)
  configure_file(${CHPL_MAIN_INCLUDE_DIR}/chpl/config/config.h.cmake
                 ${CHPL_INCLUDE_DIR}/chpl/config/config.h)
  
 -
- # request C++17
--set(CMAKE_CXX_STANDARD 17)
+-# request C++14 -- or C++17 if using LLVM 16
+-if (CHPL_LLVM_VERSION VERSION_LESS 16.0)
+-  set(CMAKE_CXX_STANDARD 14)
+-else()
+-  set(CMAKE_CXX_STANDARD 17)
+-endif()
++# request C++17
 +set(CMAKE_CXX_STANDARD 20)
 +set(CXX_EXTENSIONS OFF)
  set(CMAKE_CXX_STANDARD_REQUIRED True)
@@ -36,7 +41,7 @@ index d4248b70e9..6301e3fab3 100644
  # generate the compile_commands.json compilation database
  # tools like the fieldsUsed linter require this
  set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
-@@ -128,15 +135,16 @@ endif()
+@@ -132,15 +135,16 @@ endif()
  
  # lib/CMakeLists.txt defines the target ChplFrontend
  add_subdirectory(lib)
@@ -60,13 +65,28 @@ index d4248b70e9..6301e3fab3 100644
 +#   add_subdirectory(test)
 +# endif()
 diff --git a/frontend/include/chpl/framework/Context.h b/frontend/include/chpl/framework/Context.h
-index 33ee4190e2..9787eff363 100644
+index 0f891965ef..587a1ea741 100644
 --- a/frontend/include/chpl/framework/Context.h
 +++ b/frontend/include/chpl/framework/Context.h
-@@ -1078,6 +1078,15 @@ class Context {
-     size_t depth = 0;
-     bool enableQueryTimingTrace = false;
+@@ -952,6 +952,50 @@ class Context {
+    */
+   void queryTimingReport(std::ostream& os);
  
++  void finishQueryStopwatch(querydetail::QueryMapBase* base,
++                            size_t depth,
++                            const std::string& args,
++                            querydetail::QueryTimingDuration elapsed);
++
++  template<typename... ArgTs>
++  struct ReportOnExit {
++    using Stopwatch = querydetail::QueryTimingStopwatch<ReportOnExit>;
++    Context* context = nullptr;
++    querydetail::QueryMapBase* base = nullptr;
++    const std::tuple<ArgTs...>* tupleOfArgs = nullptr;
++    bool enableQueryTiming = false;
++    size_t depth = 0;
++    bool enableQueryTimingTrace = false;
++
 +    explicit ReportOnExit(Context *ctx = nullptr,
 +                          querydetail::QueryMapBase *base_ = nullptr,
 +                          const std::tuple<ArgTs...> *tup = nullptr,
@@ -76,11 +96,44 @@ index 33ee4190e2..9787eff363 100644
 +          enableQueryTiming(enableQueryTiming_), depth(dep),
 +          enableQueryTimingTrace(enableQueryTimingTrace_) {}
 +
-     ReportOnExit(const ReportOnExit& rhs) = delete;
-     ReportOnExit(ReportOnExit&& rhs) = default;
-     ReportOnExit& operator=(const ReportOnExit& rhs) = delete;
++    ReportOnExit(const ReportOnExit& rhs) = delete;
++    ReportOnExit(ReportOnExit&& rhs) = default;
++    ReportOnExit& operator=(const ReportOnExit& rhs) = delete;
++    ReportOnExit& operator=(ReportOnExit&& rhs) = default;
++
++    bool enabled() { return enableQueryTiming || enableQueryTimingTrace; }
++
++    void operator()(Stopwatch& stopwatch) {
++      // Return if the map is empty (to allow for default-construction).
++      if (base == nullptr) return;
++      bool enabled = enableQueryTiming || enableQueryTimingTrace;
++      if (enabled) {
++        auto elapsed = stopwatch.elapsed();
++        std::ostringstream oss;
++        if (tupleOfArgs) querydetail::queryArgsPrint(oss, *tupleOfArgs);
++        context->finishQueryStopwatch(base, depth, oss.str(), elapsed);
++      }
++    };
++  };
++
+   // Used in the in QUERY_BEGIN_TIMING macro. Creates a stopwatch that starts
+   // timing if we are enabled. And then on scope exit we conditionally stop the
+   // timing and add it to the total or log it.
+diff --git a/frontend/include/chpl/resolution/scope-types.h b/frontend/include/chpl/resolution/scope-types.h
+index 81ea24801d..75a75cd911 100644
+--- a/frontend/include/chpl/resolution/scope-types.h
++++ b/frontend/include/chpl/resolution/scope-types.h
+@@ -29,7 +29,7 @@
+ #include <unordered_map>
+ #include <utility>
+ 
+-#include "llvm/ADT/None.h"
++// #include "llvm/ADT/None.h"
+ #include "llvm/ADT/SmallPtrSet.h"
+ #include "llvm/ADT/SmallSet.h"
+ 
 diff --git a/frontend/lib/CMakeLists.txt b/frontend/lib/CMakeLists.txt
-index d39352c04b..c5f17d21c4 100644
+index 6d7f113938..85081d9abb 100644
 --- a/frontend/lib/CMakeLists.txt
 +++ b/frontend/lib/CMakeLists.txt
 @@ -15,6 +15,11 @@
@@ -151,19 +204,19 @@ index d39352c04b..c5f17d21c4 100644
  
  # SHELL: is needed here to remove unwanted quotes from the list of arguments
  # COMPILE_LANGUAGE:CXX is needed here to make sure we only set the flags
-@@ -98,6 +110,7 @@ set(CHPL_FRONTEND_INCLUDES ${CHPL_MAIN_INCLUDE_DIR} ${CHPL_INCLUDE_DIR})
- target_include_directories(ChplFrontend PUBLIC ${CHPL_FRONTEND_INCLUDES})
- target_include_directories(ChplFrontendShared PUBLIC ${CHPL_FRONTEND_INCLUDES})
+@@ -99,6 +111,7 @@ target_include_directories(ChplFrontend PUBLIC
+                            ${CHPL_MAIN_INCLUDE_DIR}
+                            ${CHPL_INCLUDE_DIR})
  
 +set(CHPL_LLVM_LINK_ARGS "${LLVM_LIBRARIES}")
  if (CHPL_LLVM_STATIC_DYNAMIC STREQUAL "static")
    if(APPLE)
      if (CHPL_LLVM_VERSION VERSION_LESS 14.0)
 diff --git a/frontend/lib/resolution/InitResolver.h b/frontend/lib/resolution/InitResolver.h
-index b67a31c738..15317712ae 100644
+index 37f2286ca9..6a08ffdc0d 100644
 --- a/frontend/lib/resolution/InitResolver.h
 +++ b/frontend/lib/resolution/InitResolver.h
-@@ -42,7 +42,6 @@ class InitResolver {
+@@ -43,7 +43,6 @@ class InitResolver {
      types::QualifiedType qt;
      UniqueString name;
      bool isInitialized;

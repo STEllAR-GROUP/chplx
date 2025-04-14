@@ -129,6 +129,7 @@ std::string SymbolBuildingVisitor::emitChapelLine(uast::AstNode const* ast) {
 }
 
 bool SymbolBuildingVisitor::enter(const uast::AstNode * ast) {
+   assert(ctx != nullptr);
    if(chplx::util::compilerDebug) {
       std::cout << "***Enter AST Node\t" << tagToString(ast->tag()) << std::endl
                 << "***\tCurrent Scope\t" << symbolTable.symbolTableRef->id << std::endl
@@ -377,6 +378,17 @@ std::cout << "ELSE\t" << identifier_str << std::endl;
              std::string ident{std::string{"range_" + emitChapelLine(ast)}};
 
              auto & arrk = std::get<std::shared_ptr<array_kind>>(sym->get().kind);
+             if(!std::holds_alternative<std::shared_ptr<domain_kind>>(sym->get().kind))
+             arrk->args.emplace_back(
+               Symbol{{
+                   std::make_shared<domain_kind>(domain_kind{{
+                      symbolTable.symbolTableRef->id,
+                      std::string{"domain_" + emitChapelLine(ast)}, {}, 
+                      std::make_shared<kind_node_type>(kind_node_type{})
+                   }}),
+                   std::string{"domain_" + emitChapelLine(ast)},
+                   {}, -1, false, symbolTable.symbolTableRef->id,
+               }});
              auto & domk = std::get<std::shared_ptr<domain_kind>>(arrk->args.back().kind);
              domk->args.emplace_back(
                 Symbol{{
