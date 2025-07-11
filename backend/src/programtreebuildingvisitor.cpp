@@ -281,6 +281,39 @@ bool ProgramTreeBuildingVisitor::enter(const uast::AstNode * ast) {
            std::string identifier{dynamic_cast<Identifier const*>(ast)->name().c_str()};
            std::optional<Symbol> varsym =
                symbolTable.find(symbolTableRef->id, identifier);
+
+           if (fle->isArrayInitForLoop)
+           {
+              auto arrayVarsym = pendingArrayForLoopSymbols.front();
+              pendingArrayForLoopSymbols.pop();
+              auto arrayIdentifier = arrayVarsym->identifier;
+
+              auto varsymInsideForLoop = arrayVarsym;
+              std::string iteratorName = fle->iterator.identifier;
+              auto arrayIdentifierForLoopExpression =
+                  arrayIdentifier + "(" + iteratorName + ")";
+              std::vector<Statement>* cStmts = curStmts.back();
+              varsymInsideForLoop->kind = std::make_shared<func_kind>(func_kind{
+                  {symbolTable.symbolTableRef->id, {}, {}, {}}, true, false});
+
+              cStmts->emplace_back(std::make_shared<BinaryOpExpression>(
+                  BinaryOpExpression{{{symbolTableRef->id}, "=", ast}, {}}));
+              auto& bo =
+                  std::get<std::shared_ptr<BinaryOpExpression>>(cStmts->back());
+
+              bo->statements.emplace_back(
+
+                  VariableExpression{std::make_shared<Symbol>(Symbol{
+                      varsymInsideForLoop->kind,
+                      arrayIdentifierForLoopExpression,    // This is "arr(i)"
+                      {}, -1, false, symbolTableRef->id})});
+
+              bo->statements.emplace_back(
+                  VariableExpression{std::make_shared<Symbol>(*varsym)});
+
+              return true;
+           }
+
            if(varsym) { 
               if(fle->indexSet.size() < 2) {
                  fle->indexSet.emplace_back(VariableExpression{std::make_shared<Symbol>(*varsym)});
@@ -1187,21 +1220,65 @@ bool ProgramTreeBuildingVisitor::enter(const uast::AstNode * ast) {
                   std::shared_ptr<ForLoopExpression> & fle =
                      std::get<std::shared_ptr<ForLoopExpression>>(curStmts[curStmts.size()-2]->back());
 
+                  std::string arrayIdentifier = "";
+                  std::optional<Symbol> arrayVarsym{};
+
+                  // Search in parent scope for array variables
+                  if(!pendingArrayForLoopSymbols.empty()) {
+                     arrayVarsym = pendingArrayForLoopSymbols.front();
+                     pendingArrayForLoopSymbols.pop();
+                     arrayIdentifier = arrayVarsym->identifier;
+
+                     auto varsymInsideForLoop = arrayVarsym;
+                     std::string iteratorName = fle->iterator.identifier;
+                     auto arrayIdentifierForLoopExpression = arrayIdentifier + "(" + iteratorName + ")";
+                     std::vector<Statement> * cStmts = curStmts.back();
+                     varsymInsideForLoop->kind = std::make_shared<func_kind>(func_kind{{
+                           symbolTable.symbolTableRef->id, {}, {}, {}}, true, false});
+                     cStmts->emplace_back(
+                              std::make_shared<BinaryOpExpression>(BinaryOpExpression{
+                                 {{symbolTableRef->id}, "=", ast}, {}
+                              })
+                           );
+                     auto & bo = std::get<std::shared_ptr<BinaryOpExpression>>(cStmts->back());
+
+                     
+                     bo->statements.emplace_back(
+                        
+                        VariableExpression{std::make_shared<Symbol>(Symbol{
+                           varsymInsideForLoop->kind,
+                           arrayIdentifierForLoopExpression, // This is "arr(i)"
+                           {}, -1, false, symbolTableRef->id
+                        })}
+                     );
+
+                     bo->statements.emplace_back(
+                        std::make_shared<BinaryOpExpression>(
+                           BinaryOpExpression{ {{symbolTableRef->id}, identifier, ast}, {} }
+                        )
+                     );
+
+                     auto & rhsOp = std::get<std::shared_ptr<BinaryOpExpression>>(bo->statements.back());
+                     curStmts.push_back(&(rhsOp->statements));
+                  }
+
+
                   if(fle->indexSet.size() < 2) {
                      fle->indexSet.emplace_back(
                         std::make_shared<BinaryOpExpression>(BinaryOpExpression{
                            {{symbolTableRef->id}, identifier, ast}, {}
                         })
                      );
-                  }
-                  else {
-                     cStmts->emplace_back(
-                        std::make_shared<BinaryOpExpression>(BinaryOpExpression{
-                           {{symbolTableRef->id}, identifier, ast}, {}
-                        })
-                     );
-                     auto & nbo = std::get<std::shared_ptr<BinaryOpExpression>>(cStmts->back());
-                     curStmts.push_back(&(nbo->statements));
+                  }else{
+                     if(!arrayVarsym) {
+                        cStmts->emplace_back(
+                           std::make_shared<BinaryOpExpression>(BinaryOpExpression{
+                              {{symbolTableRef->id}, identifier, ast}, {}
+                           })
+                        );
+                        auto & nbo = std::get<std::shared_ptr<BinaryOpExpression>>(cStmts->back());
+                        curStmts.push_back(&(nbo->statements));
+                     }
                   }
                }
                else if(1 < curStmts.size() && curStmts[curStmts.size()-2]->size() && std::holds_alternative<std::shared_ptr<ForallLoopExpression>>(curStmts[curStmts.size()-2]->back())) {
@@ -1335,6 +1412,7 @@ bool ProgramTreeBuildingVisitor::enter(const uast::AstNode * ast) {
        std::string identifier =
           std::string{dynamic_cast<NamedDecl const*>(ast)->name().c_str()};
        std::optional<Symbol> varsym{};
+       std::optional<Symbol> varsymInsideForLoop{};
        symbolTable.find(symbolTableRef->id, identifier, varsym);
        bool stmt = true;
 
@@ -1344,6 +1422,35 @@ bool ProgramTreeBuildingVisitor::enter(const uast::AstNode * ast) {
 
            fl->iterator = *varsym;
            stmt = false;
+
+           if (fl->isArrayInitForLoop)
+           {
+             // This is the iterator variable in an array init for-loop
+             // We need to find the target array variable from the parent scope
+             // Look for array variable in the parent scope that's being initialized
+             // Search in parent scope for array variables
+             auto parentScopeId = symbolTable.parentSymbolTableId;
+             std::optional<std::pair<std::map<std::string, Symbol>::iterator,
+                 std::map<std::string, Symbol>::iterator>>
+                 allSymbols = symbolTable.findPrefix(parentScopeId, "");
+             if (allSymbols.has_value())
+             {
+                     for (auto it = allSymbols->first; it != allSymbols->second;
+                          ++it)
+                     {
+                        if (std::holds_alternative<std::shared_ptr<func_kind>>(
+                                it->second.kind))
+                        {
+                       auto func_sym = std::get<std::shared_ptr<func_kind>>(
+                           it->second.kind);
+                       if (func_sym->isArrayInitForLoop)
+                       {
+                          pendingArrayForLoopSymbols.push(func_sym->arraySym);
+                       }
+                        }
+                     }
+             }
+           }
        }
        else if (1 < curStmts.size() && std::holds_alternative<std::shared_ptr<ForallLoopExpression>>( curStmts[curStmts.size()-2]->back() ) ) {
            std::shared_ptr<ForallLoopExpression> & fl =
@@ -1596,6 +1703,13 @@ bool ProgramTreeBuildingVisitor::enter(const uast::AstNode * ast) {
        std::string identifier{"for" + emitChapelLine(ast)};
        std::optional<Symbol> varsym =
           symbolTable.find(symbolTableRef->id, identifier);
+       bool isArrayInitForLoop = false;
+      
+      if(!varsym) {
+         identifier = "array_init_for" + emitChapelLine(ast);
+         varsym = symbolTable.find(symbolTableRef->id, identifier);
+         if(varsym.has_value()) isArrayInitForLoop = true;
+      }
 
        if(varsym.has_value() && std::holds_alternative<std::shared_ptr<func_kind>>(varsym->kind)) {
           std::vector<Statement> * cStmts = curStmts.back();
@@ -1605,7 +1719,7 @@ bool ProgramTreeBuildingVisitor::enter(const uast::AstNode * ast) {
 
           cStmts->emplace_back(
              std::make_shared<ForLoopExpression>(
-                ForLoopExpression{{{fk->lutId}, ast, {}}, *varsym, {}, {}, {}, emitChapelLine(ast)}
+                ForLoopExpression{{{fk->lutId}, ast, {}}, *varsym, {}, {}, {}, emitChapelLine(ast),isArrayInitForLoop}
           ));
 
           auto & fndecl = std::get<std::shared_ptr<ForLoopExpression>>(cStmts->back());

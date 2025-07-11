@@ -105,6 +105,27 @@ namespace forall {
 #line 68 "forall.chpl"
             std::cout << C(i) << std::endl;
         });
+#line 71 "forall.chpl"
+        chplx::Array<std::int64_t, chplx::Domain<1>> D(chplx::Range(0, 2));
+#line 71 "forall.chpl"
+        chplx::forLoop(chplx::Range{0, 2}, [&](auto i) {
+#line 72 "forall.chpl"
+            D(i) = i;
+        });
+#line 74 "forall.chpl"
+        chplx::Array<std::int64_t, chplx::Domain<1>> E(chplx::Range(0, 2));
+#line 74 "forall.chpl"
+        chplx::forLoop(chplx::Range{0, 2}, [&](auto i) {
+#line 75 "forall.chpl"
+            E(i) = i + 1;
+        });
+#line 77 "forall.chpl"
+        chplx::Array<std::int64_t, chplx::Domain<1>> F(chplx::Range(0, 2));
+#line 77 "forall.chpl"
+        chplx::forLoop(chplx::Range{0, 2}, [&](auto i) {
+#line 78 "forall.chpl"
+            F(i) = ((i + 1) + i) + 1;
+        });
 
         delete exec;
     }
