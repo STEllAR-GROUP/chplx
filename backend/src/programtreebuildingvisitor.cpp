@@ -281,11 +281,11 @@ bool ProgramTreeBuildingVisitor::enter(const uast::AstNode * ast) {
            std::string identifier{dynamic_cast<Identifier const*>(ast)->name().c_str()};
            std::optional<Symbol> varsym =
                symbolTable.find(symbolTableRef->id, identifier);
-
+           
            if (fle->isArrayInitForLoop)
            {
               auto arrayVarsym = pendingArrayForLoopSymbols.front();
-              pendingArrayForLoopSymbols.pop();
+              pendingArrayForLoopSymbols.pop_front();
               auto arrayIdentifier = arrayVarsym->identifier;
 
               auto varsymInsideForLoop = arrayVarsym;
@@ -1224,9 +1224,9 @@ bool ProgramTreeBuildingVisitor::enter(const uast::AstNode * ast) {
                   std::optional<Symbol> arrayVarsym{};
 
                   // Search in parent scope for array variables
-                  if(!pendingArrayForLoopSymbols.empty()) {
+                  if(!pendingArrayForLoopSymbols.empty() && fle->isArrayInitForLoop) {
                      arrayVarsym = pendingArrayForLoopSymbols.front();
-                     pendingArrayForLoopSymbols.pop();
+                     pendingArrayForLoopSymbols.pop_front();
                      arrayIdentifier = arrayVarsym->identifier;
 
                      auto varsymInsideForLoop = arrayVarsym;
@@ -1445,7 +1445,18 @@ bool ProgramTreeBuildingVisitor::enter(const uast::AstNode * ast) {
                            it->second.kind);
                        if (func_sym->isArrayInitForLoop)
                        {
-                          pendingArrayForLoopSymbols.push(func_sym->arraySym);
+                          const auto& candidate = func_sym->arraySym;
+                          const auto& candidateArrIdentifier = func_sym->arrayIdentifier;
+
+                          if (pendingArrayForLoopSymbolsMap.find(candidateArrIdentifier) !=
+                              pendingArrayForLoopSymbolsMap.end())
+                          {
+                              // Already added this symbol
+                              continue;
+                          }
+                          pendingArrayForLoopSymbolsMap[candidateArrIdentifier] = true;
+
+                          pendingArrayForLoopSymbols.push_back(candidate);
                        }
                         }
                      }

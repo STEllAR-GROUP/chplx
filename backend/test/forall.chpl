@@ -76,3 +76,11 @@ var E : [0..2] int = for i in 0..2 do
 
 var F : [0..2] int = for i in 0..2 do
   i+1 + i+1;
+
+var G : [0..2] int;
+
+for i in 0..2 do
+  G[i] = i+1 + i+1;
+
+var H : [0..2] int = for j in 0..2 do
+  j+1 + j+1;
