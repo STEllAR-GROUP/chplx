@@ -311,6 +311,9 @@ struct array_kind : public funcbase_kind {
 struct func_kind : public funcbase_kind {
    bool is_iter;
    bool is_lambda;
+   bool isArrayInitForLoop = false;
+   std::string arrayIdentifier = ""; // used in array init for-loops
+   std::optional<Symbol> arraySym;
 };
 
 struct tuple_kind : public funcbase_kind {

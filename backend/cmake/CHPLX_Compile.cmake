@@ -182,6 +182,22 @@ function(chplx_compile_project name)
     set(generator_toolset -T ${CMAKE_GENERATOR_TOOLSET})
   endif()
 
+  if(NOT fmt_DIR AND CHPLX_WITH_TESTS)
+    if(EXISTS "${CMAKE_INSTALL_PREFIX}/lib/cmake/fmt")
+      message(STATUS "Using fmt from ${CMAKE_INSTALL_PREFIX}/lib/cmake/fmt")
+      set(fmt_DIR "${CMAKE_INSTALL_PREFIX}/lib/cmake/fmt" CACHE PATH
+          "Path to fmt CMake configuration files")
+    endif()
+  endif()
+
+  if(NOT HPX_DIR AND CHPLX_WITH_TESTS)
+    if(EXISTS "${CMAKE_INSTALL_PREFIX}/lib/cmake/HPX")
+      message(STATUS "Using HPX from ${CMAKE_INSTALL_PREFIX}/lib/cmake/HPX")
+      set(HPX_DIR "${CMAKE_INSTALL_PREFIX}/lib/cmake/HPX" CACHE PATH
+          "Path to HPX CMake configuration files")
+    endif()
+  endif()
+
   add_custom_command(
     COMMAND ${CMAKE_COMMAND} . -B ./build
         -G ${CMAKE_GENERATOR} ${generator_toolset}

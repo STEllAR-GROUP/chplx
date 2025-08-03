@@ -245,6 +245,8 @@ struct ForLoopExpression : public ScopeExpression {
    std::vector<Statement> statements;
    std::string chplLine;
 
+   bool isArrayInitForLoop = false;
+
    void emit(std::ostream & os) const;
 };
 
