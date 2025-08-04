@@ -1,4 +1,4 @@
-//  Copyright (c) 2023 Hartmut Kaiser
+//  Copyright (c) 2023-2025 Hartmut Kaiser
 //
 //  SPDX-License-Identifier: BSL-1.0
 //  Distributed under the Boost Software License, Version 1.0. (See accompanying
@@ -10,6 +10,7 @@
 
 #include <cstddef>
 #include <string>
+#include <tuple>
 
 template <typename Tuple> void testPlus(Tuple const &t, Tuple const &expected) {
 
@@ -156,10 +157,35 @@ void testNonHomogenous() {
   }
 }
 
+void testStructuredBindings() {
+  chplx::Tuple t(2, 4L, std::string("33"));
+  auto [a, b, c] = t;
+  HPX_TEST_EQ(a, 2);
+  HPX_TEST_EQ(b, 4L);
+  HPX_TEST_EQ(c, std::string("33"));
+
+  std::apply(
+      [](auto a, auto b, auto c) {
+        HPX_TEST_EQ(a, 2);
+        HPX_TEST_EQ(b, 4L);
+        HPX_TEST_EQ(c, std::string("33"));
+      },
+      t.base());
+
+  chplx::apply(
+      [](auto a, auto b, auto c) {
+        HPX_TEST_EQ(a, 2);
+        HPX_TEST_EQ(b, 4L);
+        HPX_TEST_EQ(c, std::string("33"));
+      },
+      t);
+}
+
 int main() {
 
   testHomogenous();
   testNonHomogenous();
+  testStructuredBindings();
 
   return hpx::util::report_errors();
 }

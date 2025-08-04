@@ -1,4 +1,4 @@
-# Copyright (c) 2023 Hartmut Kaiser
+# Copyright (c) 2023-2025 Hartmut Kaiser
 #
 # SPDX-License-Identifier: BSL-1.0
 # Distributed under the Boost Software License, Version 1.0. *(See accompanying
@@ -26,22 +26,31 @@ project(chplx_library VERSION ${CHPLX_LIBRARY_VERSION})
 
 include(FetchContent)
 
-set(HPX_USE_CMAKE_CXX_STANDARD ON CACHE BOOL "")
-set(HPX_WITH_CXX20 ON CACHE BOOL "")
+set(HPX_USE_CMAKE_CXX_STANDARD
+    ON
+    CACHE BOOL ""
+)
+set(HPX_WITH_CXX20
+    ON
+    CACHE BOOL ""
+)
 
-set(hpx_repository https://github.com/STEllAR-GROUP/hpx.git CACHE STRING "URL for hpx")
+set(hpx_repository
+    https://github.com/STEllAR-GROUP/hpx.git
+    CACHE STRING "URL for hpx"
+)
 
 if(CHPLX_WITH_FETCH_HPX)
-  FetchContent_Declare(
+  fetchcontent_declare(
     jemalloc
     GIT_REPOSITORY https://github.com/jemalloc/jemalloc.git
-    GIT_TAG        5.3.0
+    GIT_TAG 5.3.0
   )
 
   # 2) Populate & build/install via Autotools at configure time
-  FetchContent_GetProperties(jemalloc)
+  fetchcontent_getproperties(jemalloc)
   if(NOT jemalloc_POPULATED)
-    FetchContent_Populate(jemalloc)
+    fetchcontent_populate(jemalloc)
 
     # where we'll stage the install
     set(JEMALLOC_INSTALL_DIR ${CMAKE_BINARY_DIR}/_deps/jemalloc-install)
@@ -54,15 +63,13 @@ if(CHPLX_WITH_FETCH_HPX)
       OUTPUT_QUIET
     )
     execute_process(
-      COMMAND ./configure
-              --prefix=${JEMALLOC_INSTALL_DIR}
-              --enable-shared
+      COMMAND ./configure --prefix=${JEMALLOC_INSTALL_DIR} --enable-shared
               --disable-static
       WORKING_DIRECTORY ${jemalloc_SOURCE_DIR}
       OUTPUT_QUIET
     )
     execute_process(
-      COMMAND make -j       # or make -j${CMAKE_BUILD_PARALLEL_LEVEL}
+      COMMAND make -j # or make -j${CMAKE_BUILD_PARALLEL_LEVEL}
       WORKING_DIRECTORY ${jemalloc_SOURCE_DIR}
       OUTPUT_QUIET
     )
@@ -72,32 +79,61 @@ if(CHPLX_WITH_FETCH_HPX)
       OUTPUT_QUIET
     )
 
-    set(jemalloc_POPULATED ON CACHE BOOL "set it to prevent building again")
-    set(Jemalloc_ROOT ${JEMALLOC_INSTALL_DIR} CACHE PATH "Path for Jemalloc")
+    set(jemalloc_POPULATED
+        ON
+        CACHE BOOL "set it to prevent building again"
+    )
+    set(Jemalloc_ROOT
+        ${JEMALLOC_INSTALL_DIR}
+        CACHE PATH "Path for Jemalloc"
+    )
   endif()
 
   # Tell CMake to look in our staging area for find_package()
   list(APPEND CMAKE_PREFIX_PATH "${JEMALLOC_INSTALL_DIR}")
 
-
-  FetchContent_Declare(hpx
+  fetchcontent_declare(
+    hpx
     GIT_REPOSITORY ${hpx_repository}
     GIT_TAG master
     GIT_PROGRESS TRUE
     GIT_SHALLOW 1
   )
-  set(HPX_WITH_FETCH_ASIO ON CACHE BOOL "FETCH ASIO for HPX")
-  set(HPX_WITH_FETCH_BOOST OFF CACHE BOOL "FETCH BOOST for HPX")
-  set(HPX_WITH_FETCH_HWLOC ON CACHE BOOL "FETCH HWLOC for HPX")
-  set(HPX_WITH_EXAMPLES OFF CACHE BOOL "Examples for HPX")
-  set(HPX_WITH_TESTS OFF CACHE BOOL "Tests for HPX")
-  set(HPX_WITH_MALLOC jemalloc CACHE STRING "Malloc type for HPX")
- 
-  if (CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64" OR CMAKE_SYSTEM_PROCESSOR MATCHES "arm64")
-    set(HPX_WITH_GENERIC_CONTEXT_COROUTINES ON CACHE BOOL "Enable generic context coroutines on AArch64" FORCE)
+  set(HPX_WITH_FETCH_ASIO
+      ON
+      CACHE BOOL "FETCH ASIO for HPX"
+  )
+  set(HPX_WITH_FETCH_BOOST
+      OFF
+      CACHE BOOL "FETCH BOOST for HPX"
+  )
+  set(HPX_WITH_FETCH_HWLOC
+      ON
+      CACHE BOOL "FETCH HWLOC for HPX"
+  )
+  set(HPX_WITH_EXAMPLES
+      OFF
+      CACHE BOOL "Examples for HPX"
+  )
+  set(HPX_WITH_TESTS
+      OFF
+      CACHE BOOL "Tests for HPX"
+  )
+  set(HPX_WITH_MALLOC
+      jemalloc
+      CACHE STRING "Malloc type for HPX"
+  )
+
+  if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64" OR CMAKE_SYSTEM_PROCESSOR MATCHES
+                                                 "arm64"
+  )
+    set(HPX_WITH_GENERIC_CONTEXT_COROUTINES
+        ON
+        CACHE BOOL "Enable generic context coroutines on AArch64" FORCE
+    )
     message(STATUS "HPX_WITH_GENERIC_CONTEXT_COROUTINES: ON")
   endif()
-  FetchContent_MakeAvailable(hpx)
+  fetchcontent_makeavailable(hpx)
 else()
   find_package(HPX REQUIRED CONFIG)
 endif()
@@ -107,7 +143,9 @@ set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${PROJECT_SOURCE_DIR}/cmake")
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 
 # create library target
-set(chplx_library_detail_headers include/chplx/detail/iterator_generator.hpp)
+set(chplx_library_detail_headers include/chplx/detail/generate_annotation.hpp
+                                 include/chplx/detail/iterator_generator.hpp
+)
 source_group("Header Files/chplx/detail" FILES ${chplx_library_detail_headers})
 
 set(chplx_library_domain_headers include/chplx/domains/base_rectangular.hpp
@@ -146,6 +184,9 @@ set(chplx_library_headers
 )
 source_group("Header Files/chplx" FILES ${chplx_library_headers})
 
+set(chplx_library_detail_sources src/detail/generate_annotation.cpp)
+source_group("Source Files/detail" FILES ${chplx_library_detail_sources})
+
 set(chplx_library_domain_sources src/domains/dmap.cpp)
 source_group("Source Files/domains" FILES ${chplx_library_domain_sources})
 
@@ -162,15 +203,18 @@ if(MSVC)
   set(chplx_library_sources ${chplx_library_sources} src/setenv.c)
 endif()
 
-add_library(library STATIC ${chplx_library_sources} ${chplx_library_headers})
+add_library(
+  library STATIC ${chplx_library_sources} ${chplx_library_detail_sources}
+                 ${chplx_library_headers}
+)
 
 set_property(TARGET library PROPERTY POSITION_INDEPENDENT_CODE ON)
 
 target_link_libraries(library PRIVATE fmt::fmt-header-only HPX::hpx)
 
 target_include_directories(
-  library PUBLIC  $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>
-                  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  library PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>
+                 $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
 )
 
 # define additional properties
@@ -190,12 +234,9 @@ set_target_properties(
 
 # generate version file
 # "$<IF:$<BOOL:INSTALL_INTERFACE>,${CMAKE_INSTALL_PREFIX}/include,${CMAKE_CURRENT_SOURCE_DIR}/include>/chplx/config/version.hpp"
-# if($<BOOL:INSTALL_INTERFACE>)
-#   configure_file(
-#     "${CMAKE_CURRENT_SOURCE_DIR}/cmake/templates/version.hpp.in"
-#     "${CMAKE_INSTALL_PREFIX}/include/chplx/config/version.hpp" @ONLY
-#   )
-# endif()
+# if($<BOOL:INSTALL_INTERFACE>) configure_file(
+# "${CMAKE_CURRENT_SOURCE_DIR}/cmake/templates/version.hpp.in"
+# "${CMAKE_INSTALL_PREFIX}/include/chplx/config/version.hpp" @ONLY ) endif()
 # if($<BOOL:BUILD_INTERFACE>)
 configure_file(
   "${CMAKE_CURRENT_SOURCE_DIR}/cmake/templates/version.hpp.in"
@@ -234,13 +275,13 @@ endif()
 install(
   DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/include" # source directory
   DESTINATION "${CMAKE_INSTALL_PREFIX}/" # target directory
-  # FILES_MATCHING # install only matched files
-  # PATTERN "*.h" # select header files
-  # PATTERN "*.hpp" # select header files
+  # FILES_MATCHING # install only matched files PATTERN "*.h" # select header
+  # files PATTERN "*.hpp" # select header files
 )
 
-install(TARGETS library
-  EXPORT ChplxTargets
+install(
+  TARGETS
+  library EXPORT ChplxTargets
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION bin
