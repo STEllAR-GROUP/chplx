@@ -1,4 +1,4 @@
-//  Copyright (c) 2023 Hartmut Kaiser
+//  Copyright (c) 2023-2025 Hartmut Kaiser
 //
 //  SPDX-License-Identifier: BSL-1.0
 //  Distributed under the Boost Software License, Version 1.0. (See accompanying
@@ -90,6 +90,64 @@ template <typename... Ts> struct Tuple : std::tuple<Ts...> {
 };
 
 template <typename... Ts> Tuple(Ts &&...) -> Tuple<Ts...>;
+
+// we separate the implementation of get for our tuple type so that
+// it can be injected into the std:: namespace
+namespace std_adl_barrier {
+
+template <std::size_t I, typename... Ts>
+constexpr auto &
+get(chplx::Tuple<Ts...> &t) noexcept(noexcept(std::get<I>(t.base()))) {
+  return std::get<I>(t.base());
+}
+
+template <std::size_t I, typename... Ts>
+constexpr auto const &
+get(chplx::Tuple<Ts...> const &t) noexcept(noexcept(std::get<I>(t.base()))) {
+  return std::get<I>(t.base());
+}
+
+template <std::size_t I, typename... Ts>
+constexpr auto &&get(chplx::Tuple<Ts...> &&t) noexcept(
+    noexcept(std::get<I>(std::move(t).base()))) {
+  return std::get<I>(std::move(t).base());
+}
+
+template <std::size_t I, typename... Ts>
+constexpr auto const &&get(chplx::Tuple<Ts...> const &&t) noexcept(
+    noexcept(std::get<I>(std::move(t).base()))) {
+  return std::get<I>(std::move(t).base());
+}
+
+template <typename F, typename... Ts>
+constexpr decltype(auto) apply(F &&f, chplx::Tuple<Ts...> &t) noexcept(
+    noexcept(std::apply(std::forward<F>(f), t.base()))) {
+  return std::apply(std::forward<F>(f), t.base());
+}
+
+template <typename F, typename... Ts>
+constexpr decltype(auto) apply(F &&f, chplx::Tuple<Ts...> const &t) noexcept(
+    noexcept(std::apply(std::forward<F>(f), t.base()))) {
+  return std::apply(std::forward<F>(f), t.base());
+}
+
+template <typename F, typename... Ts>
+constexpr decltype(auto) apply(F &&f, chplx::Tuple<Ts...> &&t) noexcept(
+    noexcept(std::apply(std::forward<F>(f), std::move(t).base()))) {
+  return std::apply(std::forward<F>(f), std::move(t).base());
+}
+
+template <typename F, typename... Ts>
+constexpr decltype(auto) apply(F &&f, chplx::Tuple<Ts...> const &&t) noexcept(
+    noexcept(std::apply(std::forward<F>(f), std::move(t).base()))) {
+  return std::apply(std::forward<F>(f), std::move(t).base());
+}
+
+} // namespace std_adl_barrier
+
+using chplx::std_adl_barrier::apply;
+using chplx::std_adl_barrier::get;
+
 } // namespace chplx
 
 //-----------------------------------------------------------------------------
@@ -103,25 +161,7 @@ template <size_t I, typename... Ts>
 struct tuple_element<I, chplx::Tuple<Ts...>> : tuple_element<I, tuple<Ts...>> {
 };
 
-template <size_t I, typename... Ts>
-constexpr auto &get(chplx::Tuple<Ts...> &t) noexcept {
-  return get<I>(t.base());
-}
-
-template <size_t I, typename... Ts>
-constexpr auto const &get(chplx::Tuple<Ts...> const &t) noexcept {
-  return get<I>(t.base());
-}
-
-template <size_t I, typename... Ts>
-constexpr auto &&get(chplx::Tuple<Ts...> &&t) noexcept {
-  return get<I>(std::move(t.base()));
-}
-
-template <size_t I, typename... Ts>
-constexpr auto const &&get(chplx::Tuple<Ts...> const &&t) noexcept {
-  return get<I>(std::move(t.base()));
-}
+using chplx::std_adl_barrier::get;
 
 } // namespace std
 
