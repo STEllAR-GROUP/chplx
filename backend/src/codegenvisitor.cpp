@@ -575,18 +575,32 @@ struct StatementVisitor {
       //auto const& rk = std::get<std::shared_ptr<range_kind>>(node->indexSet.kind);
       //auto & indices = rk->args;
 
-      os << "chplx::forLoop(chplx::Range{";
-      if(node->indexSet.size() == 1) {
-          ExprVisitor ev{os};
-          std::visit(ev, node->indexSet[0]);
+      os << "chplx::forLoop(";
+      std::string range_str = "chplx::Range{";
+      if (node->indexSet.size() == 1)
+      {
+         if (std::holds_alternative<VariableExpression>(node->indexSet[0]))
+         {
+            if (std::get<VariableExpression>(node->indexSet[0])
+                    .sym->identifier == "Locales")
+            {
+               range_str = "";
+            }
+         }
+         os << range_str;
+         ExprVisitor ev{os};
+         std::visit(ev, node->indexSet[0]);
       }
-      else if(node->indexSet.size() == 2) {
-          ExprVisitor ev{os};
-          std::visit(ev, node->indexSet[0]);
-          os << ',';
-          std::visit(ev, node->indexSet[1]);
+      else if (node->indexSet.size() == 2)
+      {
+         os << range_str;
+         ExprVisitor ev{os};
+         std::visit(ev, node->indexSet[0]);
+         os << ',';
+         std::visit(ev, node->indexSet[1]);
       }
-      else {
+      else
+      {
          assert(node->indexSet.size() < 3);
       }
 /*
@@ -609,7 +623,10 @@ struct StatementVisitor {
          }
       }
 */
-      os << "}, [&](auto " << node->iterator.identifier << ") {" << std::endl;
+      if(range_str != ""){
+         os << "}";
+      }
+      os << ", [&](auto " << node->iterator->identifier << ") {" << std::endl;
 
       ++indent;
       for(const auto& stmt : node->statements) {
@@ -626,24 +643,72 @@ struct StatementVisitor {
       }
       emitIndent();
 
+
+      const bool isZippedRange = node->isZippedIter;
+
+      if (isZippedRange)
+      {
+         os << "chplx::forall(chplx::zip(";
+         int i = 0;
+         for (auto& idx : node->indexSet)
+         {
+            if (i++ > 0)
+               os << ',';
+            ExprVisitor ev{os};
+            std::visit(ev, idx);
+         }
+         os << "), [&](";
+         i = 0;
+         for (auto& itr : node->iterator)
+         {
+            if (i++ > 0)
+               os << ", ";
+            os << "auto&& " << itr->identifier;
+         }
+         os << ") {" << std::endl;
+
+         ++indent;
+         for (const auto& stmt : node->statements)
+         {
+            visit(*this, stmt);
+         }
+         --indent;
+         emitIndent();
+         os << "});" << std::endl;
+         return;
+      }
+
       // replace with statements
       //
       //auto const& rk = std::get<std::shared_ptr<range_kind>>(node->indexSet.kind);
       //auto & indices = rk->args;
 
-      os << "chplx::forall(chplx::Range{";
-
-      if(node->indexSet.size() == 1) {
-          ExprVisitor ev{os};
-          std::visit(ev, node->indexSet[0]);
+      os << "chplx::forall(";
+      std::string range_str = "chplx::Range{";
+      if (node->indexSet.size() == 1)
+      {
+         if (std::holds_alternative<VariableExpression>(node->indexSet[0]))
+         {
+            if (std::get<VariableExpression>(node->indexSet[0])
+                    .sym->identifier == "Locales")
+            {
+               range_str = "";
+            }
+         }
+         os << range_str;
+         ExprVisitor ev{os};
+         std::visit(ev, node->indexSet[0]);
       }
-      else if(node->indexSet.size() == 2) {
-          ExprVisitor ev{os};
-          std::visit(ev, node->indexSet[0]);
-          os << ',';
-          std::visit(ev, node->indexSet[1]);
+      else if (node->indexSet.size() == 2)
+      {
+         os << range_str;
+         ExprVisitor ev{os};
+         std::visit(ev, node->indexSet[0]);
+         os << ',';
+         std::visit(ev, node->indexSet[1]);
       }
-      else {
+      else
+      {
          assert(node->indexSet.size() < 3);
       }
 /*
@@ -666,7 +731,10 @@ struct StatementVisitor {
          }
       }
 */
-      os << "}, [&](auto " << node->iterator.identifier << ") {" << std::endl;
+      if(range_str != ""){
+         os << "}";
+      }
+      os << ", [&](auto " << node->iterator[0]->identifier << ") {" << std::endl;
 
       ++indent;
       for(const auto& stmt : node->statements) {
@@ -686,7 +754,7 @@ struct StatementVisitor {
       //auto const& rk = std::get<std::shared_ptr<range_kind>>(node->indexSet.kind);
       //auto & indices = rk->args;
 
-      os << "chplx::coforall(chplx::Range{";
+      os << "chplx::coforall(";
 /*
       if(std::holds_alternative<int_kind>(indices[0].kind)) {
          os << int_kind::value(indices[0].literal[0]);
@@ -697,21 +765,39 @@ struct StatementVisitor {
          os << int_kind::value(indices[1].literal[0]);
       }
 */
-      if(node->indexSet.size() == 1) {
-          ExprVisitor ev{os};
-          std::visit(ev, node->indexSet[0]);
+      std::string range_str = "chplx::Range{";
+      if (node->indexSet.size() == 1)
+      {
+         if (std::holds_alternative<VariableExpression>(node->indexSet[0]))
+         {
+            if (std::get<VariableExpression>(node->indexSet[0])
+                    .sym->identifier == "Locales")
+            {
+               range_str = "";
+            }
+         }
+         os << range_str;
+         ExprVisitor ev{os};
+         std::visit(ev, node->indexSet[0]);
       }
-      else if(node->indexSet.size() == 2) {
-          ExprVisitor ev{os};
-          std::visit(ev, node->indexSet[0]);
-          os << ',';
-          std::visit(ev, node->indexSet[1]);
+      else if (node->indexSet.size() == 2)
+      {
+         os << range_str;
+         ExprVisitor ev{os};
+         std::visit(ev, node->indexSet[0]);
+         os << ',';
+         std::visit(ev, node->indexSet[1]);
       }
-      else {
+      else
+      {
          assert(node->indexSet.size() < 3);
       }
 
-      os << "}, [&](auto " << node->iterator.identifier << ") {" << std::endl;
+      if(range_str != ""){
+         os << "}";
+      }
+
+      os << ", [&](auto " << node->iterator->identifier << ") {" << std::endl;
       ++indent;
       for(const auto& stmt : node->statements) {
          visit(*this, stmt);
@@ -719,6 +805,84 @@ struct StatementVisitor {
       --indent;
       emitIndent();
       os << "});" << std::endl;
+   }
+   void operator()(std::shared_ptr<OnExpression> const& node) {
+      if(printChplLine) {
+         emitIndent();
+         os << node->chplLine;
+      }
+      emitIndent();
+      assert(node->OnLocaleVarExpr.size() == 1);
+      os << "chplx::on(";
+      if (!std::holds_alternative<VariableExpression>(node->OnLocaleVarExpr[0]))
+      {
+         assert(false && "OnExpression indexSet should be a VariableExpression");
+      }
+      ExprVisitor ev{os};
+      std::visit(ev, node->OnLocaleVarExpr[0]);
+
+      os << ", [](auto&& " << node->OnLocale->identifier ;
+      if (node->OnLocaleVarsUsedInExpr.size() > 0)
+      {
+         chplx::util::dout << "OnExpression OnLocaleVarsUsedInExpr size: "
+                   << node->OnLocaleVarsUsedInExpr.size() << std::endl;
+         std::map<std::string, bool> printed_vars;
+         printed_vars[node->OnLocale->identifier] = true;
+         for (std::size_t i = 0; i < node->OnLocaleVarsUsedInExpr.size(); ++i)
+         {
+            
+            if (!std::holds_alternative<VariableExpression>(
+                    node->OnLocaleVarsUsedInExpr[i]))
+            {
+               assert(false &&
+                   "OnExpression OnLocaleVarsUsedInExpr should be a "
+                   "VariableExpression");
+            }
+            if(printed_vars.find(std::get<VariableExpression>(node->OnLocaleVarsUsedInExpr[i]).sym->identifier) != printed_vars.end()) {
+               continue; // already printed
+            }
+            printed_vars[std::get<VariableExpression>(node->OnLocaleVarsUsedInExpr[i]).sym->identifier] = true;
+
+            os << ", auto&& ";
+            
+            ExprVisitor ev{os};
+            std::visit(ev, node->OnLocaleVarsUsedInExpr[i]);
+         }
+      }
+      os << ") {" << std::endl;
+      ++indent;
+      for(const auto& stmt : node->statements) {
+         visit(*this, stmt);
+      }
+      --indent;
+      emitIndent();
+      os << "}, " << node->OnLocale->identifier ;
+      if (node->OnLocaleVarsUsedInExpr.size() > 0)
+      {
+         chplx::util::dout << "OnExpression OnLocaleVarsUsedInExpr size: "
+                   << node->OnLocaleVarsUsedInExpr.size() << std::endl;
+         std::map<std::string, bool> printed_vars;
+         printed_vars[node->OnLocale->identifier] = true;
+         for (std::size_t i = 0; i < node->OnLocaleVarsUsedInExpr.size(); ++i)
+         {
+            if (!std::holds_alternative<VariableExpression>(
+                    node->OnLocaleVarsUsedInExpr[i]))
+            {
+               assert(false &&
+                   "OnExpression OnLocaleVarsUsedInExpr should be a "
+                   "VariableExpression");
+            }
+            if(printed_vars.find(std::get<VariableExpression>(node->OnLocaleVarsUsedInExpr[i]).sym->identifier) != printed_vars.end()) {
+               continue; // already printed
+            }
+            printed_vars[std::get<VariableExpression>(node->OnLocaleVarsUsedInExpr[i]).sym->identifier] = true;
+            os << " ,";
+            
+            ExprVisitor ev{os};
+            std::visit(ev, node->OnLocaleVarsUsedInExpr[i]);
+         }
+      }
+      os << ");" << std::endl;
    }
    void operator()(std::shared_ptr<ReturnExpression> const& node) {
       emitIndent();

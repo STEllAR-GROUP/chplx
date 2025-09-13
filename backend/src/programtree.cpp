@@ -7,6 +7,7 @@
  * file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
  */
 #include "hpx/programtree.hpp"
+#include "hpx/utils.hpp"
 #include "chpl/uast/all-uast.h"
 #include <fmt/args.h>
 
@@ -22,7 +23,13 @@ namespace chplx { namespace ast { namespace hpx {
 
 struct ScalarDeclarationExpressionVisitor {
     template<typename T>
-    void operator()(T const&) {}
+    void operator()(T const&) {
+       os << "unknown";
+    }
+
+    void operator()(locale_kind const& kind) {
+       os << "chplx::locale";
+    }
 
     void operator()(bool_kind const& kind) {
        os << "bool";
@@ -112,7 +119,6 @@ void ScalarDeclarationLiteralExpressionVisitor::operator()(string_kind const&) {
 }
 
 void ScalarDeclarationLiteralExpressionVisitor::operator()(std::shared_ptr<array_kind> const& n)  {
-   std::cout << "ARRK" << std::endl;
 }
 
 void ScalarDeclarationLiteralExpression::emit(std::ostream & os) const {
@@ -136,7 +142,8 @@ void ArrayDeclarationExpression::emit(std::ostream & os) const {
    os << "chplx::Array<";
    std::visit(ScalarDeclarationExpressionVisitor{os}, akref->retKind);
 
-   const auto & rngs= std::get<std::shared_ptr<domain_kind>>(akref->args[0].kind)->args;
+   const auto & rngs= akref->args.size() ? std::get<std::shared_ptr<domain_kind>>(akref->args[0].kind)->args : 
+      std::vector<Symbol>{};
    os << ", chplx::Domain<" << rngs.size() << "> > " << identifier << "(";
 
    bool first = true;
@@ -146,6 +153,18 @@ void ArrayDeclarationExpression::emit(std::ostream & os) const {
       if (!first) {
          first = false;
          os << ", ";
+      }
+
+      for(auto & idx : indices) {
+         if(idx.identifier == "numLocales"){
+            idx.identifier = "chplx::numLocales";
+         }
+         if(idx.identifier == "Locales"){
+            idx.identifier = "chplx::Locales";
+         }
+         if(idx.identifier == "here"){
+            idx.identifier = "chplx::here";
+         }
       }
 
       if(indices.size() == 2) {
@@ -213,7 +232,6 @@ struct ArrayDeclarationLiteralExpressionVisitor {
        os << "std::string";
     }
     void operator()(std::shared_ptr<array_kind> const& arr) {
-       std::cout << "ARRK" << std::endl;
     }
     void operator()(kind_node_type const& n) {
        // does not terminate vector declaration
@@ -293,10 +311,14 @@ void ArrayDeclarationLiteralExpression::emit(std::ostream & os) const {
    std::size_t domcount = 0;
    std::size_t prev_idx = 0;
    for(auto & kt : kindtypes) {
-      if(std::holds_alternative<std::shared_ptr<array_kind>>(kt) &&
-         (prev_idx == 0 || prev_idx == 18)) {
-         ++domcount;
-         prev_idx = kt.index();
+      if (std::holds_alternative<std::shared_ptr<array_kind>>(kt) &&
+          (prev_idx == 0 ||
+              prev_idx ==
+                  chplx::util::detail::variant_index<kind_types,
+                      std::shared_ptr<array_kind>>()))
+      {
+          ++domcount;
+          prev_idx = kt.index();
       }
       else if(!skip) {
          std::visit(ArrayDeclarationLiteralExpressionVisitor{typelist}, kt);
@@ -458,11 +480,17 @@ struct ArgumentVisitor {
        os << '\"' << string_kind::value(node) << '\"';
     }
     void operator()(LiteralExpression const& e) {
+      chplx::util::dout << "LiteralExpression: " << e.kind.index() << std::endl;
        node = e.value;
        std::visit(*this, e.kind);
     }
     void operator()(VariableExpression const& e) {
-       os << e.sym->identifier;
+       std::string ident{e.sym->identifier};
+       if(ident == "numLocales") {
+          ident = "chplx::numLocales";
+       }
+      chplx::util::dout << "VariableExpression: " << ident << std::endl;
+       os << ident;
     }
     void operator()(std::shared_ptr<FunctionCallExpression> const& node) {
        node->emit(os);
@@ -556,6 +584,8 @@ void FunctionCallExpression::emit(std::ostream & os) const {
       const std::size_t args_sz = arguments.size();
       std::string fn_fmt_str{};
       fmt::dynamic_format_arg_store<fmt::format_context> store;
+      chplx::util::dout << "Function Call: " << symbol.identifier << std::endl;
+      chplx::util::dout << "Function Call Arguments: " << args_sz << std::endl;
       if((symbol.identifier) == "[]" && 0 < args_sz) {
           ArgumentVisitor v{nullptr, std::stringstream{}};
           std::visit(v, arguments[0]);
@@ -568,19 +598,32 @@ void FunctionCallExpression::emit(std::ostream & os) const {
              store.push_back(v.os.str());
           }
           auto inside_par = fmt::vformat(fn_fmt_str, store);
-          os << v.os.str()  << '(' << inside_par << ')';
+          std::string fn_call{v.os.str()};
+          if(fn_call == "Locales"){
+            fn_call = "chplx::Locales";
+          }
+          os << fn_call << '(' << inside_par << ')';
       }
       else {
-         for(std::size_t i = 1; i < args_sz; ++i) {
-            fn_fmt_str += (i == 1) ? "{}" : ", {}";
+         std::string identifier_str{symbol.identifier.c_str()};
+         if(symbol.identifier == "writeln") {
+            identifier_str = "chplx::writeln";
+         }
+         else if (symbol.identifier == "Locales"){
+            identifier_str = "chplx::Locales";
+         }
+
+         for(std::size_t i = 0; i < args_sz; ++i) {
+            fn_fmt_str += (i < 1) ? "{}" : ", {}";
             Statement const& stmt = arguments[i];
+            chplx::util::dout << "Function Call Argument: " << i << " argument kind: " << stmt.index() << std::endl;
             ArgumentVisitor v{nullptr, std::stringstream{}};
             std::visit(v, stmt);
             store.push_back(v.os.str());
          }
 
-         auto pos = symbol.identifier.find('|');
-         os << symbol.identifier.substr( 0, (pos == std::string::npos) ? symbol.identifier.size() : pos ) << '(' << fmt::vformat(fn_fmt_str, store) << ")";
+         auto pos = identifier_str.find('|');
+         os << identifier_str.substr( 0, (pos == std::string::npos) ? identifier_str.size() : pos ) << '(' << fmt::vformat(fn_fmt_str, store) << ")";
       }
    }
 }
@@ -589,7 +632,21 @@ void FunctionDeclarationExpression::emit(std::ostream & os) const {
 }
 
 void VariableExpression::emit(std::ostream & os) const {
-    os << sym->identifier;
+   std::string ident{sym->identifier};
+   if (ident == "numLocales")
+   {
+      ident = "chplx::numLocales";
+   }
+   else if (ident == "Locales")
+   {
+      ident = "chplx::Locales";
+   }
+   else if (ident == "here")
+   {
+      ident = "chplx::here";
+   }
+
+   os << ident;
 };
 
 void LiteralExpression::emit(std::ostream & os) const {

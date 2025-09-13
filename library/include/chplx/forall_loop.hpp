@@ -241,8 +241,6 @@ void forall(AssocDomain<T> const &d, F &&f, Args &&...args) {
   }
 }
 
-//-----------------------------------------------------------------------------
-// forall loop for zippered iteration
 template <typename... Rs, typename F, typename... Args>
 void forall(detail::ZipRange<Rs...> const &zr, F &&f, Args &&...args) {
   if (chplx_fork_join_executor) {
@@ -251,17 +249,48 @@ void forall(detail::ZipRange<Rs...> const &zr, F &&f, Args &&...args) {
         hpx::execution::par.on(*exec), detail::IteratorGenerator(zr),
         [&, ... fargs = detail::task_intent<std::decay_t<Args>>::call(
                 std::forward<Args>(args))]<typename Arg>(Arg &&value) mutable {
-          f(std::forward<Arg>(value),
-            hpx::util::decay_unwrap<decltype(fargs)>::call(fargs)...);
+            f(std::forward<Arg>(value),
+              hpx::util::decay_unwrap<decltype(fargs)>::call(fargs)...);
         });
   } else {
-
     hpx::ranges::experimental::for_loop(
         hpx::execution::par, detail::IteratorGenerator(zr),
         [&, ... fargs = detail::task_intent<std::decay_t<Args>>::call(
                 std::forward<Args>(args))]<typename Arg>(Arg &&value) mutable {
-          f(std::forward<Arg>(value),
-            hpx::util::decay_unwrap<decltype(fargs)>::call(fargs)...);
+        f(std::forward<Arg>(value),
+          hpx::util::decay_unwrap<decltype(fargs)>::call(fargs)...);
+        });
+  }
+}
+
+//-----------------------------------------------------------------------------
+// forall loop for zippered iteration
+template <typename... Rs, typename F, typename... Args>
+void forall(detail::ZipRange<Rs...> &&zr, F &&f, Args &&...args) {
+  if (chplx_fork_join_executor) {
+    HPX_ASSERT(exec != nullptr);
+    hpx::ranges::experimental::for_loop(
+        hpx::execution::par.on(*exec), detail::IteratorGenerator(zr),
+        [&, ... fargs = detail::task_intent<std::decay_t<Args>>::call(
+                std::forward<Args>(args))]<typename Arg>(Arg &&value) mutable {
+          std::apply(
+              [&](auto &&...vs) mutable {
+                f(std::forward<decltype(vs)>(vs)...,
+                  hpx::util::decay_unwrap<decltype(fargs)>::call(fargs)...);
+              },
+              std::forward<Arg>(value));
+        });
+  } else {
+    hpx::ranges::experimental::for_loop(
+        hpx::execution::par, detail::IteratorGenerator(zr),
+        [&, ... fargs = detail::task_intent<std::decay_t<Args>>::call(
+                std::forward<Args>(args))]<typename Arg>(Arg &&value) mutable {
+          std::apply(
+              [&](auto &&...vs) mutable {
+                f(std::forward<decltype(vs)>(vs)...,
+                  hpx::util::decay_unwrap<decltype(fargs)>::call(fargs)...);
+              },
+              std::forward<Arg>(value));
         });
   }
 }

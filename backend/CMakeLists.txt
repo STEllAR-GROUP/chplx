@@ -35,10 +35,12 @@ if(CHPLX_WITH_FETCH_FMT)
   include(FetchContent)
   FetchContent_Declare(fmt
     GIT_REPOSITORY https://github.com/fmtlib/fmt.git
-    GIT_TAG master
+    GIT_TAG 11.2.0
     GIT_PROGRESS TRUE
   )
   FetchContent_MakeAvailable(fmt)
+  set(FMT_MASTER_PROJECT ON)
+  set(FMT_INSTALL ON)
 else()
   find_package(fmt REQUIRED CONFIG)
 endif()
@@ -84,7 +86,7 @@ target_link_directories(
   chplx PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/../build/frontend/lib
 )
 target_link_libraries(chplx PRIVATE ChplFrontend ${llvm_libs})
-target_link_libraries(chplx PRIVATE fmt::fmt-header-only)
+target_link_libraries(chplx PRIVATE fmt::fmt)
 
 if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
   # GCC often puts <filesystem> in libstdc++fs

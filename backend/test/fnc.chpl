@@ -26,3 +26,8 @@ var c = 1;
 beta(c);
 c = beta(c);
 c = betad(c);
+
+writeln("Hello World from Chapel!");
+writeln("One: ", 1, " Units");
+writeln("C: ", c, " Units");
+writeln("C inc: ", betad(c), " Units");

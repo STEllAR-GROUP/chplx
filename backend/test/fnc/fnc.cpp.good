@@ -61,6 +61,14 @@ namespace fnc {
         c = beta(c);
 #line 28 "fnc.chpl"
         c = betad(c);
+#line 30 "fnc.chpl"
+        chplx::writeln("Hello World from Chapel!");
+#line 31 "fnc.chpl"
+        chplx::writeln("One: ", 1, " Units");
+#line 32 "fnc.chpl"
+        chplx::writeln("C: ", c, " Units");
+#line 33 "fnc.chpl"
+        chplx::writeln("C inc: ", betad(c), " Units");
 
         delete exec;
     }

@@ -25,6 +25,8 @@
 #include <memory>
 #include <optional>
 
+#include "hpx/utils.hpp"
+
 //using namespace chplx::util;
 
 namespace chpl { namespace ast { namespace visitors { namespace hpx {
@@ -83,6 +85,7 @@ struct string_kind {
 };
 
 struct auto_kind {};
+struct locale_kind {};
 
 struct ref_kind;
 struct const_kind;
@@ -102,35 +105,35 @@ struct iter_kind;
 struct range_kind;
 struct domain_kind;
 
-using kind_types = std::variant<
-   std::monostate,
-   template_kind,
-   nil_kind,
-   byte_kind,
-   bool_kind,
-   int_kind,
-   real_kind,
-   complex_kind,
-   string_kind,
-   std::shared_ptr<range_kind>,
-   std::shared_ptr<domain_kind>,
-   std::shared_ptr<ref_kind>,
-   std::shared_ptr<const_kind>,
-   std::shared_ptr<config_kind>,
-   std::shared_ptr<cxxfunc_kind>,
-   std::shared_ptr<func_kind>,
-   std::shared_ptr<record_kind>,
-   std::shared_ptr<class_kind>,
-   std::shared_ptr<array_kind>,
-   std::shared_ptr<associative_kind>,
-   std::shared_ptr<tuple_kind>,
-   std::shared_ptr<kind_node_type>,
-   std::shared_ptr<module_kind>,
-   kind_node_term_type,
-   expr_kind,
-   auto_kind,
-   std::shared_ptr<iter_kind>
->;
+using kind_types = std::variant<std::monostate,    // 0
+    template_kind,                                 // 1
+    nil_kind,                                      // 2
+    byte_kind,                                     // 3
+    bool_kind,                                     // 4
+    int_kind,                                      // 5
+    real_kind,                                     // 6
+    complex_kind,                                  // 7
+    string_kind,                                   // 8
+    locale_kind,                                   // 9
+    std::shared_ptr<range_kind>,                   // 10
+    std::shared_ptr<domain_kind>,                  // 11
+    std::shared_ptr<ref_kind>,                     // 12
+    std::shared_ptr<const_kind>,                   // 13
+    std::shared_ptr<config_kind>,                  // 14
+    std::shared_ptr<cxxfunc_kind>,                 // 15
+    std::shared_ptr<func_kind>,                    // 16
+    std::shared_ptr<record_kind>,                  // 17
+    std::shared_ptr<class_kind>,                   // 18
+    std::shared_ptr<array_kind>,                   // 19
+    std::shared_ptr<associative_kind>,             // 20
+    std::shared_ptr<tuple_kind>,                   // 21
+    std::shared_ptr<kind_node_type>,               // 22
+    std::shared_ptr<module_kind>,                  // 23
+    kind_node_term_type,                           // 24
+    expr_kind,                                     // 25
+    auto_kind,                                     // 26
+    std::shared_ptr<iter_kind>                     // 27
+    >;
 
 struct kind_node_type {
    std::vector<kind_types> children;
@@ -184,6 +187,19 @@ struct SymbolBase {
            identifier.find("complex") != std::string::npos ||
            identifier.find("range") != std::string::npos ||
            identifier.find("domain") != std::string::npos );
+    }
+
+    bool isTypeKind() {
+        return kind.index() < 10 && scopeId == 0 && (
+           identifier  == "nil" ||
+           identifier  == "bool" ||
+           identifier  == "string" ||
+           identifier  == "int" ||
+           identifier  == "real" ||
+           identifier  == "byte" ||
+           identifier  == "complex" ||
+           identifier  == "range" ||
+           identifier  == "domain" );
     }
 };
 

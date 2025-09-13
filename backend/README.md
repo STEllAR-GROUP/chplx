@@ -36,3 +36,6 @@ This directory contains the backend.
 - date
 
   Feb, 2023
+
+
+View [guide](./CONTRIBUTING.md) for adding to ChplX compiler.

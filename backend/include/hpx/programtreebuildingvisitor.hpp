@@ -54,6 +54,17 @@ struct ProgramTreeBuildingVisitor {
    std::optional<uast::AstTag> prevTag;
    std::deque<std::optional<Symbol>> pendingArrayForLoopSymbols;
    std::map<std::string, bool> pendingArrayForLoopSymbolsMap;
+   
+   std::vector<std::shared_ptr<OnExpression>> onExprStack;
+
+   int isInsideOn = 0;
+   std::shared_ptr<OnExpression> currentOnExpr = nullptr;
+
+   bool pushedDot = false;
+   bool specialPushedDot = false;
+
+   bool isInsideZip = false;
+   int isInsideForallTuple = 0;
 
    static std::unordered_map<std::string, int> operatorEncoder;
 };

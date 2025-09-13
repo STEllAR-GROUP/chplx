@@ -19,6 +19,10 @@ namespace fn {
     {
 #line 11 "fn.chpl"
         void print();
+#line 44 "fn.chpl"
+        void initRandomVectors(chplx::Array<double, chplx::Domain<1>>& A,
+            chplx::Array<double, chplx::Domain<1>>& B, std::int64_t m,
+            std::int64_t seed);
 
         static void __construct()
         {

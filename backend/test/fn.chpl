@@ -41,3 +41,29 @@ proc writeln(value : real) {
 
 writeln(1.0);
 */
+ proc initRandomVectors(A: [] real,
+                        B: [] real,
+                        m: int,
+                     seed: int) {
+   const Acoef = 1664525;
+   const Ccoef = 1013904223;
+   const M     = 1 << 31;      // 2^31
+   const D     = M - 1;        // for scaling to [0,1]
+
+   var s = seed;
+   for idx in 0..m {
+      // advance state, fill A
+      s = (Acoef*s + Ccoef) % M;
+      A[idx] = s / D ;
+
+      // advance state, fill B
+      s = (Acoef*s + Ccoef) % M;
+      B[idx] = s / D ;
+   }
+}
+
+const m = 100000;
+var A: [1..m] real;
+var B: [1..m] real;
+initRandomVectors(A, B, m, 1234);
+
