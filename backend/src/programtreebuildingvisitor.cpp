@@ -531,10 +531,12 @@ bool ProgramTreeBuildingVisitor::enter(const uast::AstNode * ast) {
            std::string identifier{dynamic_cast<Identifier const*>(ast)->name().c_str()};
            std::optional<Symbol> varsym =
                symbolTable.find(symbolTableRef->id, identifier);
+
             if(fle->indexSet.size() < 2 && varsym->kind.index() == 5) {
                fle->indexSet.emplace_back(VariableExpression{std::make_shared<Symbol>(*varsym)});
                return true;
             }
+
            
            if (fle->isArrayInitForLoop)
            {
@@ -543,7 +545,9 @@ bool ProgramTreeBuildingVisitor::enter(const uast::AstNode * ast) {
               auto arrayIdentifier = arrayVarsym->identifier;
 
               auto varsymInsideForLoop = arrayVarsym;
+
               std::string iteratorName = fle->iterator->identifier;
+
               auto arrayIdentifierForLoopExpression =
                   arrayIdentifier + "(" + iteratorName + ")";
               std::vector<Statement>* cStmts = curStmts.back();
@@ -568,7 +572,6 @@ bool ProgramTreeBuildingVisitor::enter(const uast::AstNode * ast) {
               return true;
            }
 
-           
 
            if(varsym) { 
               if(fle->indexSet.size() < 2) {
@@ -2264,6 +2267,7 @@ bool ProgramTreeBuildingVisitor::enter(const uast::AstNode * ast) {
                      arrayIdentifier = arrayVarsym->identifier;
 
                      auto varsymInsideForLoop = arrayVarsym;
+
                      std::string iteratorName = fle->iterator->identifier;
                      auto arrayIdentifierForLoopExpression = arrayIdentifier + "(" + iteratorName + ")";
 
@@ -2496,12 +2500,14 @@ bool ProgramTreeBuildingVisitor::enter(const uast::AstNode * ast) {
              stmt = false;
            }
 
+
            if (fl->isArrayInitForLoop)
            {
              // This is the iterator variable in an array init for-loop
              // We need to find the target array variable from the parent scope
              // Look for array variable in the parent scope that's being initialized
              // Search in parent scope for array variables
+
              const auto parentScopeId = symbolTable.parentSymbolTableId;
              const auto curScopeId = symbolTable.symbolTableRef->id;
              const auto maxScope = std::max(parentScopeId, curScopeId);
