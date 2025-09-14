@@ -151,3 +151,4 @@ ChplX tracks **lexical scopes** in a tree: Module --> Function/Proc --> Block/Lo
 - [ ] Add identifier rewriting in `programtree.cpp` (only if needed).
 - [ ] Implement emission in `codegenvisitor.cpp` (`forLoop/forall/coforall/on` patterns already exist).
 - [ ] Test with a minimal Chapel snippet (including a `Locales` loop if relevant).
+
