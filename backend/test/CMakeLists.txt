@@ -27,6 +27,8 @@ set(tests
     forall
     tup
     heat
+    locale_test
+    stream_ep_lite
 )
 
 foreach(test ${tests})

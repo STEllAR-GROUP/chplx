@@ -122,37 +122,37 @@ struct TupleDeclarationExprExpression;
 struct RecordDeclarationExpression;
 struct ClassDeclarationExpression;
 struct ModuleDeclarationExpression;
+struct OnExpression;
 
-using Statement = std::variant<
-   std::monostate,
-   std::shared_ptr<StatementList>,
-   ScalarDeclarationExpression,
-   ScalarDeclarationLiteralExpression,
-   std::shared_ptr<ScalarDeclarationExprExpression>,
-   ArrayDeclarationExpression,
-   ArrayDeclarationLiteralExpression,
-   std::shared_ptr<ArrayDeclarationExprExpression>,
-   TupleDeclarationExpression,
-   TupleDeclarationLiteralExpression,
-   std::shared_ptr<TupleDeclarationExprExpression>,
-   LiteralExpression,
-   VariableExpression,
-   OpExpression,
-   std::shared_ptr<UnaryOpExpression>,
-   std::shared_ptr<BinaryOpExpression>,
-   std::shared_ptr<TernaryOpExpression>,
-   std::shared_ptr<ReturnExpression>,
-   std::shared_ptr<ScopeExpression>,
-   std::shared_ptr<FunctionDeclarationExpression>,
-   std::shared_ptr<FunctionCallExpression>,
-   std::shared_ptr<ConditionalExpression>,
-   std::shared_ptr<ForLoopExpression>,
-   std::shared_ptr<ForallLoopExpression>,
-   std::shared_ptr<CoforallLoopExpression>,
-   std::shared_ptr<RecordDeclarationExpression>,
-   std::shared_ptr<ClassDeclarationExpression>,
-   std::shared_ptr<ModuleDeclarationExpression>
->;
+using Statement = std::variant<std::monostate,           // 0
+    std::shared_ptr<StatementList>,                      // 1
+    ScalarDeclarationExpression,                         // 2
+    ScalarDeclarationLiteralExpression,                  // 3
+    std::shared_ptr<ScalarDeclarationExprExpression>,    // 4
+    ArrayDeclarationExpression,                          // 5
+    ArrayDeclarationLiteralExpression,                   // 6
+    std::shared_ptr<ArrayDeclarationExprExpression>,     // 7
+    TupleDeclarationExpression,                          // 8
+    TupleDeclarationLiteralExpression,                   // 9
+    std::shared_ptr<TupleDeclarationExprExpression>,     // 10
+    LiteralExpression,                                   // 11
+    VariableExpression,                                  // 12
+    std::shared_ptr<UnaryOpExpression>,                  // 13
+    std::shared_ptr<BinaryOpExpression>,                 // 14
+    std::shared_ptr<TernaryOpExpression>,                // 15
+    std::shared_ptr<ReturnExpression>,                   // 16
+    std::shared_ptr<ScopeExpression>,                    // 17
+    std::shared_ptr<FunctionDeclarationExpression>,      // 18
+    std::shared_ptr<FunctionCallExpression>,             // 19
+    std::shared_ptr<ConditionalExpression>,              // 20
+    std::shared_ptr<ForLoopExpression>,                  // 21
+    std::shared_ptr<ForallLoopExpression>,               // 22
+    std::shared_ptr<CoforallLoopExpression>,             // 23
+    std::shared_ptr<OnExpression>,                       // 24
+    std::shared_ptr<RecordDeclarationExpression>,        // 25
+    std::shared_ptr<ClassDeclarationExpression>,         // 26
+    std::shared_ptr<ModuleDeclarationExpression>         // 27
+    >;
 
 struct StatementList {
    std::vector<Statement> statements;
@@ -238,7 +238,7 @@ struct ConditionalExpression : public ScopeExpression {
 
 struct ForLoopExpression : public ScopeExpression {
    Symbol symbol;
-   Symbol iterator;
+   std::optional<Symbol> iterator;
    // this needs to store Statements
    //Symbol indexSet;
    std::vector<Statement> indexSet;
@@ -252,7 +252,20 @@ struct ForLoopExpression : public ScopeExpression {
 
 struct ForallLoopExpression : public ScopeExpression {
    Symbol symbol;
-   Symbol iterator;
+   std::vector<std::optional<Symbol>> iterator;
+   //Symbol indexSet;
+   std::vector<Statement> indexSet;
+   std::vector<Statement> statements;
+   std::string chplLine;
+   
+   bool isZippedIter = false;
+
+   void emit(std::ostream & os) const;
+};
+
+struct CoforallLoopExpression : public ScopeExpression {
+   Symbol symbol;
+   std::optional<Symbol> iterator;
    //Symbol indexSet;
    std::vector<Statement> indexSet;
    std::vector<Statement> statements;
@@ -261,11 +274,11 @@ struct ForallLoopExpression : public ScopeExpression {
    void emit(std::ostream & os) const;
 };
 
-struct CoforallLoopExpression : public ScopeExpression {
+struct OnExpression : public ScopeExpression {
    Symbol symbol;
-   Symbol iterator;
-   //Symbol indexSet;
-   std::vector<Statement> indexSet;
+   std::optional<Symbol> OnLocale;
+   std::vector<Statement> OnLocaleVarExpr;
+   std::vector<Statement> OnLocaleVarsUsedInExpr;
    std::vector<Statement> statements;
    std::string chplLine;
 

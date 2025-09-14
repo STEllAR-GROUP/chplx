@@ -140,6 +140,13 @@ namespace forall {
 #line 86 "forall.chpl"
             H(j) = ((j + 1) + j) + 1;
         });
+#line 88 "forall.chpl"
+        chplx::Array<std::int64_t, chplx::Domain<1>> AA(chplx::Range(0, 2));
+#line 90 "forall.chpl"
+        chplx::forall(chplx::zip(B, C), [&](auto&& b, auto&& c) {
+#line 91 "forall.chpl"
+            chplx::writeln(b, c);
+        });
 
         delete exec;
     }

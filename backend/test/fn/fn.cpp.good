@@ -24,6 +24,35 @@ namespace fn {
         double n;
     };
 
+#line 44 "fn.chpl"
+    void __thisModule::initRandomVectors(
+        chplx::Array<double, chplx::Domain<1>>& A,
+        chplx::Array<double, chplx::Domain<1>>& B, std::int64_t m,
+        std::int64_t seed)
+    {
+#line 48 "fn.chpl"
+        const std::int64_t Acoef = 1664525;
+#line 49 "fn.chpl"
+        const std::int64_t Ccoef = 1013904223;
+#line 50 "fn.chpl"
+        auto M = 1 << 31;
+#line 51 "fn.chpl"
+        auto D = M - 1;
+#line 53 "fn.chpl"
+        auto s = seed;
+#line 54 "fn.chpl"
+        chplx::forLoop(chplx::Range{0, m}, [&](auto idx) {
+#line 56 "fn.chpl"
+            s = ((Acoef * s) + Ccoef) % M;
+#line 57 "fn.chpl"
+            A(idx) = s / D;
+#line 60 "fn.chpl"
+            s = ((Acoef * s) + Ccoef) % M;
+#line 61 "fn.chpl"
+            B(idx) = s / D;
+        });
+    };
+
     void __thisModule::__main()
     {
         if (chplx_fork_join_executor)
@@ -33,6 +62,14 @@ namespace fn {
                 hpx::execution::experimental::fork_join_executor::
                     loop_schedule::static_,
                 std::chrono::nanoseconds(chplx_fork_join_executor_yield_delay));
+#line 65 "fn.chpl"
+        const std::int64_t m = 100000;
+#line 66 "fn.chpl"
+        chplx::Array<double, chplx::Domain<1>> A(chplx::Range(1, m));
+#line 67 "fn.chpl"
+        chplx::Array<double, chplx::Domain<1>> B(chplx::Range(1, m));
+#line 68 "fn.chpl"
+        initRandomVectors(A, B, m, 1234);
 
         delete exec;
     }

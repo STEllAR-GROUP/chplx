@@ -5,11 +5,13 @@
  * Distributed under the Boost Software License, Version 1.0. *(See accompanying
  * file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
  */
+#include "chpl/uast/Function.h"
 #include "hpx/programtree.hpp"
 #include "hpx/programtreebuildingvisitor.hpp"
 #include "hpx/utils.hpp"
 #include "chpl/uast/all-uast.h"
 
+#include <system_error>
 #include <variant>
 #include <fstream>
 #include <cctype>
@@ -38,7 +40,9 @@ std::unordered_map<std::string, int> ProgramTreeBuildingVisitor::operatorEncoder
     {"%",  5},
     {"[]", 6},
     {"==", 7},
-    {"<=>",8}
+    {"<=>",8},
+    {"<<", 9},
+    {">>", 10}
 };
 
 struct VariableVisitor {
@@ -96,6 +100,7 @@ struct VariableVisitor {
    void operator()(std::shared_ptr<record_kind> const&) {
    }
    void operator()(std::shared_ptr<class_kind> const&) {
+      curStmts.emplace_back(ScalarDeclarationExpression{{{scopePtr}, identifier, sym.kind, emitChapelLine(ast), sym.kindqualifier, sym.isConfig}});
    }
    void operator()(std::shared_ptr<array_kind> const& t) {
         curStmts.emplace_back(ArrayDeclarationExpression{{{scopePtr}, identifier, sym.kind, emitChapelLine(ast), sym.kindqualifier, sym.isConfig}});
@@ -159,6 +164,7 @@ struct VariableLiteralVisitor {
    void operator()(std::shared_ptr<class_kind> const&) {
    }
    void operator()(std::shared_ptr<array_kind> const& ak) {
+      chplx::util::dout << "Array Declaration Literal: " << identifier << std::endl;
       curStmts.push_back(ArrayDeclarationLiteralExpression{{{scopePtr}, identifier, sym.kind, emitChapelLine(ast), sym.kindqualifier, sym.isConfig}, {}});
       // literal arrays always have 1 domain in the symboltable
       //
@@ -176,8 +182,9 @@ std::string ProgramTreeBuildingVisitor::emitChapelLine(uast::AstNode const* ast)
 
 bool ProgramTreeBuildingVisitor::enter(const uast::AstNode * ast) {
    if(chplx::util::compilerDebug) {
-      std::cout << "***Enter AST Node\t" << tagToString(ast->tag()) << std::endl
+      chplx::util::dout << "***Enter AST Node\t" << tagToString(ast->tag()) << std::endl
                 << "***\tCurrent Scope\t" << symbolTable.symbolTableRef->id << std::endl
+                << "***\tCurrent Scope id \t" << symbolTableRef->id << std::endl
                 << "***\tCurrent Statement List Size\t" << curStmts.size() << std::endl
                 << "***\t" << emitChapelLine(ast);
    }
@@ -202,6 +209,177 @@ bool ProgramTreeBuildingVisitor::enter(const uast::AstNode * ast) {
     case asttags::Domain:
     break;
     case asttags::Dot:
+    {
+    const std::string field_name = dynamic_cast<const Dot*>(ast)->field().str();
+    const std::string class_name = dynamic_cast<Identifier const*>(
+        dynamic_cast<const Dot*>(ast)->receiver())
+                                       ->name()
+                                       .c_str();
+    const std::string func_name = (class_name == "here" ? ("chplx::") : "") +
+        class_name + "." + field_name;
+    chplx::util::dout << "Dot Expression: " << func_name << std::endl;
+    auto sym = Symbol{{std::make_shared<func_kind>(
+                           func_kind{{{}, func_name, {}, int_kind{}}}),
+        std::string{func_name}, {}, -1, false, symbolTable.symbolTableRef->id}};
+    std::vector<Statement>* cStmts = curStmts.back();
+    if (cStmts->size() &&
+        std::holds_alternative<ScalarDeclarationExpression>(cStmts->back()))
+    {
+        ScalarDeclarationExpression stmt =
+            std::get<ScalarDeclarationExpression>(cStmts->back());
+        cStmts->pop_back();
+        cStmts->emplace_back(std::make_shared<BinaryOpExpression>(
+            BinaryOpExpression{{{symbolTableRef->id}, "=", ast}, {}}));
+        auto& bo =
+            std::get<std::shared_ptr<BinaryOpExpression>>(cStmts->back());
+
+        bo->statements.emplace_back(
+            std::make_shared<ScalarDeclarationExprExpression>(
+                ScalarDeclarationExprExpression{
+                    {{stmt.scopeId}, stmt.identifier, stmt.kind, stmt.chplLine,
+                        stmt.qualifier, stmt.config},
+                    {}}));
+        auto fce = std::make_shared<FunctionCallExpression>(
+            FunctionCallExpression{{symbolTableRef->id}, std::move(sym), {},
+                emitChapelLine(ast), symbolTable});
+        bo->statements.emplace_back(fce);
+        curStmts.push_back(&(bo->statements));
+        pushedDot = true;
+        return true;
+      }
+      else if (cStmts->size() &&
+          std::holds_alternative<VariableExpression>(cStmts->back()))
+      {
+          VariableExpression stmt =
+              std::get<VariableExpression>(cStmts->back());
+          cStmts->pop_back();
+          std::shared_ptr<BinaryOpExpression> bop;
+          if (std::holds_alternative<std::shared_ptr<BinaryOpExpression>>(
+                  curStmts[curStmts.size() - 2]->back()))
+          {
+              bop = std::get<std::shared_ptr<BinaryOpExpression>>(
+                  curStmts[curStmts.size() - 2]->back());
+              auto fce = std::make_shared<FunctionCallExpression>(
+                  FunctionCallExpression{{symbolTableRef->id}, std::move(sym),
+                      {}, emitChapelLine(ast), symbolTable});
+              bop->statements.emplace_back(stmt);
+              bop->statements.emplace_back(fce);
+              curStmts.push_back(&(bop->statements));
+              pushedDot = true;
+              return true;
+          }
+          else
+          {
+              bop = std::make_shared<BinaryOpExpression>(
+                  BinaryOpExpression{{{symbolTableRef->id}, "=", ast}, {}});
+          }
+          cStmts->emplace_back(bop);
+
+          bop->statements.emplace_back(stmt);
+          auto fce = std::make_shared<FunctionCallExpression>(
+              FunctionCallExpression{{symbolTableRef->id}, std::move(sym), {},
+                  emitChapelLine(ast), symbolTable});
+          bop->statements.emplace_back(fce);
+
+          curStmts.push_back(&(bop->statements));
+          pushedDot = true;
+          return true;
+      }
+      else if (std::holds_alternative<std::shared_ptr<BinaryOpExpression>>(
+                   cStmts->back()))
+      {
+          auto& bop =
+              std::get<std::shared_ptr<BinaryOpExpression>>(cStmts->back());
+          auto fce = std::make_shared<FunctionCallExpression>(
+              FunctionCallExpression{{symbolTableRef->id}, std::move(sym), {},
+                  emitChapelLine(ast), symbolTable});
+          std::vector<Statement> bop_stmts_new;
+          for (auto& stmt : bop->statements)
+          {
+              if (std::holds_alternative<VariableExpression>(stmt))
+              {
+                  auto& varExpr = std::get<VariableExpression>(stmt);
+                  bop_stmts_new.emplace_back(varExpr);
+                  break;
+              }
+          }
+          bop_stmts_new.emplace_back(fce);
+          bop->statements = std::move(bop_stmts_new);
+          curStmts.push_back(&(bop->statements));
+          pushedDot = true;
+          return true;
+      }
+      else if (curStmts.size() > 1 &&
+          std::holds_alternative<std::shared_ptr<BinaryOpExpression>>(
+              curStmts[curStmts.size() - 2]->back()))
+      {
+          auto& bop = std::get<std::shared_ptr<BinaryOpExpression>>(
+              curStmts[curStmts.size() - 2]->back());
+          auto bop_sym = bop->statements.back();
+          auto& bop_stmts = bop->statements;
+          if (std::holds_alternative<VariableExpression>(bop->statements[0]))
+          {
+              auto& varExpr = std::get<VariableExpression>(bop->statements[0]);
+          }
+          return true;
+      }
+      else if (cStmts->size() &&
+          std::holds_alternative<
+              std::shared_ptr<ScalarDeclarationExprExpression>>(cStmts->back()))
+      {
+          auto& sde =
+              std::get<std::shared_ptr<ScalarDeclarationExprExpression>>(
+                  cStmts->back());
+          cStmts->pop_back();
+          cStmts->emplace_back(std::make_shared<BinaryOpExpression>(
+              BinaryOpExpression{{{symbolTableRef->id}, "=", ast}, {}}));
+          auto& bo =
+              std::get<std::shared_ptr<BinaryOpExpression>>(cStmts->back());
+
+          bo->statements.emplace_back(sde);
+          auto fce = std::make_shared<FunctionCallExpression>(
+              FunctionCallExpression{{symbolTableRef->id}, std::move(sym), {},
+                  emitChapelLine(ast), symbolTable});
+          bo->statements.emplace_back(fce);
+          curStmts.push_back(&(bo->statements));
+          pushedDot = true;
+          return true;
+      }
+      else if(cStmts->size() && std::holds_alternative<std::shared_ptr<FunctionCallExpression>>(cStmts->back())) {   
+         chplx::util::dout << "345\n";
+         std::shared_ptr<FunctionCallExpression> & fce =
+            std::get<std::shared_ptr<FunctionCallExpression>>(cStmts->back());
+         fce->arguments.push_back(std::make_shared<FunctionCallExpression>(
+             FunctionCallExpression{{symbolTableRef->id}, std::move(sym), {},
+                 emitChapelLine(ast), symbolTable}));
+         pushedDot = true;
+         return true;
+      }
+      else
+      {
+         chplx::util::dout << "356\n";
+          // this is the case where dot expression is used somewhere without assignment
+          if(cStmts->size())
+          chplx::util::dout << "cStmts back kind: " << cStmts->back().index() << std::endl;
+         if(curStmts.size() > 1) chplx::util::dout << "CurStmts back kind: " << curStmts[curStmts.size()-2]->back().index() << std::endl;
+         // if(curStmts.size() > 1 && std::holds_alternative<std::shared_ptr<FunctionCallExpression>>(curStmts[curStmts.size()-2]->back())) {
+         //    chplx::util::dout << "Found Function Call Expression in Parent List\n";
+         //    std::shared_ptr<FunctionCallExpression> & fce =
+         //       std::get<std::shared_ptr<FunctionCallExpression>>(curStmts[curStmts.size()-2]->back());
+         //    fce->arguments.push_back(std::make_shared<FunctionCallExpression>(
+         //        FunctionCallExpression{{symbolTableRef->id}, std::move(sym), {},
+         //            emitChapelLine(ast), symbolTable}));
+         //    pushedDot = true;
+         //    return true;
+         // }
+          cStmts->emplace_back(std::make_shared<FunctionCallExpression>(
+              FunctionCallExpression{{symbolTableRef->id}, std::move(sym), {},
+                  emitChapelLine(ast), symbolTable}));
+         //  pushedDot = true;
+         specialPushedDot = true;
+          return true;
+      }
+    }
     break;
     case asttags::EmptyStmt:
     break;
@@ -217,11 +395,61 @@ bool ProgramTreeBuildingVisitor::enter(const uast::AstNode * ast) {
        const bool cStmtsnz = 0 < cStmts->size();
        std::string identifier{dynamic_cast<Identifier const*>(ast)->name().c_str()};
 
+       chplx::util::dout << "Identifier: " << identifier << std::endl;
+       if(curStmts.size()>1){
+         chplx::util::dout << "CurStmts Kind: " << curStmts[curStmts.size()-2]->back().index() << std::endl;
+       }
+
+       if (curStmts.size() > 1)
+       {
+         chplx::util::dout << "402\n";
+         auto* parentList = curStmts[curStmts.size() - 2];
+         if (!parentList->empty() &&
+             std::holds_alternative<std::shared_ptr<FunctionCallExpression>>(
+                 parentList->back()))
+         {
+              chplx::util::dout << "411 Found Function Call Expression in Parent List\n";
+              std::optional<Symbol> varsym =
+                  symbolTable.find(symbolTableRef->id, identifier);
+              auto& fce = std::get<std::shared_ptr<FunctionCallExpression>>(
+                  parentList->back());
+
+              auto fce_call = fce->symbol.identifier;
+              chplx::util::dout << "Function Call Identifier: " << fce_call << std::endl;
+              if(cStmtsnz )
+              chplx::util::dout << "cStmts back kind: " << cStmts->back().index() << std::endl;
+              if (varsym &&
+                  !std::holds_alternative<std::shared_ptr<func_kind>>(
+                      varsym->kind) && !std::holds_alternative<std::shared_ptr<cxxfunc_kind>>(
+                      varsym->kind) && "here" != varsym->identifier && !pushedDot && !specialPushedDot)
+              {
+                  chplx::util::dout << "Found Symbol: " << varsym->identifier << " kind: " << varsym->kind.index() << std::endl;
+                  fce->arguments.emplace_back(
+                      VariableExpression{std::make_shared<Symbol>(*varsym)});
+                  chplx::util::dout << "Scope ID: " << varsym->scopeId
+                            << " symbol ref " << symbolTableRef->id
+                            << " SymbolTableRef ID: " << symbolTable.symbolTableRef->id
+                            << " inssideOn counter ID: " << isInsideOn
+                            <<  (isInsideOn ? (" OnScopeId : " + std::to_string(currentOnExpr->scopeId)): "")
+                            << std::endl;
+                  if((isInsideOn > 1 || (isInsideOn && varsym->scopeId < currentOnExpr->scopeId)) && (varsym->scopeId <= isInsideOn || symbolTableRef->id >= varsym->scopeId) && identifier != "here") {
+                     chplx::util::dout << "Adding OnLocaleVarsUsedInExpr : " << identifier
+                               << " to current statements" << std::endl;
+                     currentOnExpr->OnLocaleVarsUsedInExpr.emplace_back(VariableExpression{std::make_shared<Symbol>(*varsym)});
+                  }
+              return true;
+
+              }
+         }
+       }
+
        if (1 < curStmts.size() &&
            0 < curStmts[curStmts.size()-2]->size() &&
            std::holds_alternative<std::shared_ptr<BinaryOpExpression>>( curStmts[curStmts.size()-2]->back() ) ) {
-
+            std::shared_ptr<BinaryOpExpression> & boe = std::get<std::shared_ptr<BinaryOpExpression>>( curStmts[curStmts.size()-2]->back() );
+            chplx::util::dout << "Binary Op Identifier: " << boe->op << std::endl;
            std::string identifier{dynamic_cast<Identifier const*>(ast)->name().c_str()};
+
            std::optional<Symbol> varsym =
                symbolTable.find(symbolTableRef->id, identifier);
            if(!varsym) {
@@ -240,12 +468,34 @@ bool ProgramTreeBuildingVisitor::enter(const uast::AstNode * ast) {
                     itr->first.substr(0, split == std::string::npos ? itr->first.size() : split);
 
                  if(fnident.size() == identifier.size() && fnident.substr(0, identifier.size()) == identifier) {
+                    chplx::util::dout << "410 Found Symbol: " << itr->second.identifier << " kind " << itr->second.kind.index() << std::endl;
+                    if(itr->second.identifier.find('|') != std::string::npos) continue;
                     cStmts->emplace_back(VariableExpression{std::make_shared<Symbol>(itr->second)});
                     break;
                  }
               }
            }
            else {
+              chplx::util::dout << "403 Found Symbol: " << varsym->identifier
+                        << " in scope: " << varsym->scopeId << std::endl;
+              chplx::util::dout << "Scope ID: " << symbolTable.symbolTableRef->id
+                        << "IsInsideOn: " << isInsideOn << std::endl;
+              if(isInsideOn && varsym->scopeId <= isInsideOn && varsym->identifier != "writeln" && varsym->identifier != "here") {
+                 chplx::util::dout << "407 Adding OnLocaleVarsUsedInExpr : " << identifier
+                           << " to current statements Kind: " << varsym->kind.index() << std::endl;
+
+                 chplx::util::dout << "Scope ID: " << varsym->scopeId
+                           << " SymbolTableRef ID: " << symbolTable.symbolTableRef->id
+                           << " symbolref: " << symbolTableRef->id
+                           << " inssideOn counter ID: " << isInsideOn
+                           << std::endl;
+                 currentOnExpr->OnLocaleVarsUsedInExpr.emplace_back(VariableExpression{std::make_shared<Symbol>(*varsym)});
+              }
+               if(pushedDot) {
+                  return true;
+               }
+               chplx::util::dout << "Symbol Kind " << varsym->kind.index() << std::endl;
+               if(varsym->identifier != "Locales")
               cStmts->emplace_back(VariableExpression{std::make_shared<Symbol>(*varsym)});
            }
        }
@@ -281,6 +531,12 @@ bool ProgramTreeBuildingVisitor::enter(const uast::AstNode * ast) {
            std::string identifier{dynamic_cast<Identifier const*>(ast)->name().c_str()};
            std::optional<Symbol> varsym =
                symbolTable.find(symbolTableRef->id, identifier);
+
+            if(fle->indexSet.size() < 2 && varsym->kind.index() == 5) {
+               fle->indexSet.emplace_back(VariableExpression{std::make_shared<Symbol>(*varsym)});
+               return true;
+            }
+
            
            if (fle->isArrayInitForLoop)
            {
@@ -289,7 +545,9 @@ bool ProgramTreeBuildingVisitor::enter(const uast::AstNode * ast) {
               auto arrayIdentifier = arrayVarsym->identifier;
 
               auto varsymInsideForLoop = arrayVarsym;
-              std::string iteratorName = fle->iterator.identifier;
+
+              std::string iteratorName = fle->iterator->identifier;
+
               auto arrayIdentifierForLoopExpression =
                   arrayIdentifier + "(" + iteratorName + ")";
               std::vector<Statement>* cStmts = curStmts.back();
@@ -313,6 +571,7 @@ bool ProgramTreeBuildingVisitor::enter(const uast::AstNode * ast) {
 
               return true;
            }
+
 
            if(varsym) { 
               if(fle->indexSet.size() < 2) {
@@ -360,7 +619,7 @@ bool ProgramTreeBuildingVisitor::enter(const uast::AstNode * ast) {
            std::optional<Symbol> varsym =
                symbolTable.find(symbolTableRef->id, identifier);
            if(varsym) { 
-              if(fle->indexSet.size() < 2) {
+              if(fle->indexSet.size() < 2 || (fle->indexSet.size()<3 && fle->isZippedIter)) {
                  fle->indexSet.emplace_back(VariableExpression{std::make_shared<Symbol>(*varsym)});
               }
               else if(fle->indexSet.size() && std::holds_alternative<std::shared_ptr<BinaryOpExpression>>(fle->indexSet.back())) {
@@ -405,8 +664,32 @@ bool ProgramTreeBuildingVisitor::enter(const uast::AstNode * ast) {
            std::optional<Symbol> varsym =
                symbolTable.find(symbolTableRef->id, identifier);
            if(varsym) { 
+              chplx::util::dout << "Coforall Loop Expression: " << identifier << " index set size " << fle->indexSet.size() << std::endl;
+              chplx::util::dout << "IsInsideOn: " << isInsideOn << std::endl;
               if(fle->indexSet.size() < 2) {
-                 fle->indexSet.emplace_back(VariableExpression{std::make_shared<Symbol>(*varsym)});
+                 if (fle->indexSet.size() > 0)
+                 {
+                    chplx::util::dout
+                        << "Coforall index: "
+                        << (std::get<VariableExpression>(fle->indexSet.back()))
+                               .sym->identifier
+                        << std::endl;
+                 }
+                 if (fle->indexSet.size() > 0 &&
+                     (std::get<VariableExpression>(fle->indexSet.back()))
+                             .sym->identifier == "Locales")
+                 {
+                    //don't do anything for this case
+                 }
+                 else
+                 {
+                    fle->indexSet.emplace_back(
+                        VariableExpression{std::make_shared<Symbol>(*varsym)});
+                     if(isInsideOn){
+                        currentOnExpr->OnLocaleVarsUsedInExpr.emplace_back(
+                            VariableExpression{std::make_shared<Symbol>(*varsym)});
+                     }
+                 }
               }
               else if(fle->indexSet.size() && std::holds_alternative<std::shared_ptr<BinaryOpExpression>>(fle->indexSet.back())) {
                 auto & bo = std::get<std::shared_ptr<BinaryOpExpression>>(fle->indexSet.back());
@@ -434,6 +717,10 @@ bool ProgramTreeBuildingVisitor::enter(const uast::AstNode * ast) {
                  }
                  else if(fle->indexSet.size() < 2) {
                     fle->indexSet.emplace_back(VariableExpression{std::make_shared<Symbol>(itr->second)});
+                    if(isInsideOn){
+                        currentOnExpr->OnLocaleVarsUsedInExpr.emplace_back(
+                            VariableExpression{std::make_shared<Symbol>(*varsym)});
+                     }
                  }
                  else {
                     cStmts->emplace_back(VariableExpression{std::make_shared<Symbol>(itr->second)});
@@ -442,15 +729,350 @@ bool ProgramTreeBuildingVisitor::enter(const uast::AstNode * ast) {
               }
            }
        }
+       else if(1 < curStmts.size() && std::holds_alternative<std::shared_ptr<OnExpression>>(curStmts[curStmts.size()-2]->back())) {
+         chplx::util::dout << "723\n";
+          std::shared_ptr<OnExpression> & one =
+             std::get<std::shared_ptr<OnExpression>>(curStmts[curStmts.size()-2]->back());
+
+           std::string identifier{dynamic_cast<Identifier const*>(ast)->name().c_str()};
+           std::optional<Symbol> varsym =
+               symbolTable.find(symbolTableRef->id, identifier);
+           if (varsym)
+           {
+              if (one->OnLocaleVarExpr.size() >= 1)
+              {
+                 chplx::util::dout << "Hello " << identifier << std::endl;
+                 chplx::util::dout << "Index " << varsym->kind.index() << std::endl;
+                 if (isInsideOn && !varsym->isIntegralKind() &&
+                     varsym->identifier != "writeln" &&
+                     !std::holds_alternative<std::shared_ptr<func_kind>>(
+                         varsym->kind))
+                 {
+                    chplx::util::dout
+                        << "739 Adding OnLocaleVarsUsedInExpr : " << identifier
+                        << std::endl;
+                    chplx::util::dout << "Scope ID: " << varsym->scopeId
+                              << " SymbolTableRef ID: "
+                              << symbolTable.symbolTableRef->id
+                              << " symbolref: " << symbolTableRef->id
+                              << " inssideOn counter ID: " << isInsideOn
+                              << std::endl;
+                    currentOnExpr->OnLocaleVarsUsedInExpr.emplace_back(
+                        VariableExpression{std::make_shared<Symbol>(*varsym)});
+                 }
+                 if (0 < cStmts->size() &&
+                     std::holds_alternative<
+                         std::shared_ptr<FunctionCallExpression>>(
+                         cStmts->back()) && !pushedDot )
+                 {
+                    chplx::util::dout << "Adding to function call expression "
+                              << identifier << std::endl;
+                    varsym->scopeId = symbolTable.symbolTableRef->id;
+
+                    std::shared_ptr<FunctionCallExpression>& fce =
+                        std::get<std::shared_ptr<FunctionCallExpression>>(
+                            cStmts->back());
+                    fce->arguments.push_back(
+                        VariableExpression{std::make_shared<Symbol>(*varsym)});
+                    //   if (!varsym->isIntegralKind())
+                    //       one->OnLocaleVarsUsedInExpr.emplace_back(
+                    //           VariableExpression{
+                    //               std::make_shared<Symbol>(*varsym)});
+                    chplx::util::dout << "Function call: " << fce->symbol.identifier
+                              << std::endl;
+                    return true;
+                 }
+                 if (std::holds_alternative<std::shared_ptr<func_kind>>(varsym->kind))
+                 {
+                    std::shared_ptr<func_kind>& fk =
+                        std::get<std::shared_ptr<func_kind>>(varsym->kind);
+
+                    chplx::util::dout << "696\n";
+                    cStmts->emplace_back(
+                        std::make_shared<FunctionCallExpression>(
+                            FunctionCallExpression{{symbolTableRef->id},
+                                *varsym, {}, emitChapelLine(ast),
+                                symbolTable}));
+                    auto& fndecl =
+                        std::get<std::shared_ptr<FunctionCallExpression>>(
+                            cStmts->back());
+                    curStmts.push_back(&fndecl->arguments);
+                    return true;
+                 }
+                 chplx::util::dout << "cStmts back kind: " << cStmts->back().index() << std::endl;
+                 cStmts->emplace_back(
+                     VariableExpression{std::make_shared<Symbol>(*varsym)});
+                 //   if (!varsym->isIntegralKind()){
+                 //   one->OnLocaleVarsUsedInExpr.emplace_back(
+                 //       VariableExpression{std::make_shared<Symbol>(*varsym)});
+                 //    }else{
+                 //       chplx::util::dout << "Skipping integral kind variable: "
+                 //                 << identifier << std::endl;
+                 //    }
+                 return true;
+              }
+              chplx::util::dout << "Byee " << identifier << std::endl;
+
+              if (isInsideOn && isInsideOn >= varsym->scopeId &&
+                  !std::holds_alternative<std::shared_ptr<func_kind>>(
+                      varsym->kind))
+              {
+                 chplx::util::dout << "672 Adding OnLocaleVarsUsedInExpr : "
+                           << identifier << "Kind: " << varsym->kind.index()
+                           << " to current statements" << std::endl;
+
+                 chplx::util::dout << "Scope ID: " << isInsideOn
+                           << " SymbolTableRef ID: " << symbolTableRef->id
+                           << " SymbolTableRef ID: "
+                           << symbolTable.symbolTableRef->id
+                           << " varsym ID: " << varsym->scopeId << std::endl;
+                 currentOnExpr->OnLocaleVarsUsedInExpr.emplace_back(
+                     VariableExpression{std::make_shared<Symbol>(*varsym)});
+              }
+
+              varsym->scopeId = symbolTable.symbolTableRef->id;
+
+              one->OnLocale = *varsym;
+              one->OnLocaleVarExpr.emplace_back(
+                  VariableExpression{std::make_shared<Symbol>(*varsym)});
+              return true;
+           }
+
+           auto rsym =
+              symbolTable.findPrefix(symbolTableRef->id, identifier);
+           if (rsym)
+           {
+              auto itr = rsym->first;
+              for (; itr != rsym->second; ++itr)
+              {
+                 const auto split = itr->first.find('|');
+                 const std::string fnident = itr->first.substr(
+                     0, split == std::string::npos ? itr->first.size() : split);
+
+                 if (fnident.size() == identifier.size() &&
+                     fnident.substr(0, identifier.size()) == identifier)
+                 {
+                    //   if(one->OnLocaleVarExpr.size() < 1 && std::holds_alternative<std::shared_ptr<BinaryOpExpression>>(one->OnLocaleVarExpr.back())) {
+                    //      auto & bo = std::get<std::shared_ptr<BinaryOpExpression>>(one->OnLocaleVarExpr.back());
+                    //      bo->statements.emplace_back(VariableExpression{std::make_shared<Symbol>(itr->second)});
+                    //   }
+                    //   else
+                    if (one->OnLocaleVarExpr.size() < 1)
+                    {
+                        one->OnLocale = itr->second;
+                        one->OnLocaleVarExpr.emplace_back(VariableExpression{
+                            std::make_shared<Symbol>(itr->second)});
+                        assert(one->OnLocaleVarExpr.size() == 1);
+                    }
+                    else
+                    {
+                        chplx::util::dout
+                            << "Last expr kind : " << cStmts->back().index()
+                            << std::endl;
+                        cStmts->emplace_back(VariableExpression{
+                            std::make_shared<Symbol>(itr->second)});
+                    }
+                    break;
+                 }
+              }
+           }
+       }
        else {
           std::string identifier{dynamic_cast<Identifier const*>(ast)->name().c_str()};
           std::optional<Symbol> varsym =
              symbolTable.find(symbolTableRef->id, identifier);
 
+          if (pushedDot)
+          {                      
+              return true;
+          }
+
+          if ((cStmts->size() &&
+                  std::holds_alternative<
+                      std::shared_ptr<FunctionCallExpression>>(cStmts->back())))
+          {
+              auto& fce = std::get<std::shared_ptr<FunctionCallExpression>>(
+                  cStmts->back());
+              // possible function redefinition
+              // for example:
+              // if here.id is used in a function then it will generate chplx::here.id(), here
+              if (varsym && isInsideOn && isInsideOn >= varsym->scopeId &&
+                  !std::holds_alternative<std::shared_ptr<func_kind>>(
+                      varsym->kind) && varsym->identifier != "here")
+              {
+                 chplx::util::dout << "734 Adding OnLocaleVarsUsedInExpr : "
+                           << identifier << "Kind: " << varsym->kind.index()
+                           << " to current statements" << std::endl;
+
+                 chplx::util::dout << "Scope ID: " << isInsideOn
+                           << " SymbolTableRef ID: " << symbolTableRef->id
+                           << " SymbolTableRef ID: "
+                           << symbolTable.symbolTableRef->id
+                           << " varsym ID: " << varsym->scopeId << std::endl;
+                 currentOnExpr->OnLocaleVarsUsedInExpr.emplace_back(
+                     VariableExpression{std::make_shared<Symbol>(*varsym)});
+              }
+              else if (varsym &&
+                  !std::holds_alternative<std::shared_ptr<func_kind>>(
+                      varsym->kind) &&
+                  varsym->identifier != "here")
+              {
+                 chplx::util::dout << "742 Skipping OnLocaleVarsUsedInExpr : "
+                           << identifier << " isInsideOn: " << isInsideOn
+                           << " varsym scope ID: " << varsym->scopeId
+                           << std::endl;
+              }
+              if (fce->symbol.identifier.find(identifier + ".") !=
+                  std::string::npos)
+              {
+                 return true;
+              }
+              fce->arguments.push_back(
+                  VariableExpression{std::make_shared<Symbol>(*varsym)});
+              chplx::util::dout << "Function call: " << fce->symbol.identifier
+                        << std::endl;
+              return true;
+          }
+
+          if (1 < curStmts.size() &&
+              std::holds_alternative<std::shared_ptr<FunctionCallExpression>>(
+                  curStmts[curStmts.size() - 2]->back()))
+          {
+              chplx::util::dout << "935 Found FunctionCallExpression in curStmts\n";
+              chplx::util::dout << "Identifier: " << identifier << std::endl;
+              if(varsym)
+              chplx::util::dout << "Varsim kind: " << varsym->kind.index() << std::endl;
+              std::optional<std::pair<std::map<std::string, Symbol>::iterator,
+                  std::map<std::string, Symbol>::iterator>>
+                  fnsym =
+                      symbolTable.findPrefix(symbolTableRef->id, identifier);
+              auto itr = fnsym->first;
+              for (; itr != fnsym->second; ++itr)
+              {
+                 const auto split = itr->first.find('|');
+                 const std::string fnident = itr->first.substr(
+                     0, split == std::string::npos ? itr->first.size() : split);
+
+                 if (fnident.size() == identifier.size() &&
+                     fnident.substr(0, identifier.size()) == identifier)
+                 {
+                    if (itr->second.identifier.find('|') != std::string::npos ||
+                        std::holds_alternative<std::shared_ptr<func_kind>>(
+                            itr->second.kind))
+                    {
+                        chplx::util::dout
+                            << "Skipping symbol with '|' in identifier: "
+                            << itr->second.identifier << " func: "
+                            << std::holds_alternative<
+                                   std::shared_ptr<func_kind>>(itr->second.kind)
+                            << std::endl;
+                        continue;
+                    }
+                    chplx::util::dout << "Found Symbol: " << itr->second.identifier
+                              << " kind " << itr->second.kind.index()
+                              << std::endl;
+                    cStmts->emplace_back(VariableExpression{
+                        std::make_shared<Symbol>(itr->second)});
+                    break;
+                 }
+                 else
+                 {
+                    chplx::util::dout << "Skipping symbol: " << itr->second.identifier
+                              << " does not match identifier: " << identifier
+                              << " kind: " << itr->second.kind.index()
+                              << std::endl;
+                 }
+              }
+              return true;
+          }
+
           if(varsym) {
-             if(!varsym->isIntegralKind()) {
-                cStmts->emplace_back(VariableExpression{std::make_shared<Symbol>(*varsym)});
-             }
+               if (!varsym->isIntegralKind())
+               {
+                  chplx::util::dout << "Adding variable: " << identifier
+                            << " to current statements" << std::endl;
+                  if(isInsideOn){
+                     chplx::util::dout << "On Scope " << currentOnExpr->scopeId << " varssym scope ID: " << varsym->scopeId
+                              << " isInsideOn: " << isInsideOn << " symbol scope ID: " << symbolTable.symbolTableRef->id << std::endl;
+                  }
+                  if (isInsideOn && !std::holds_alternative<std::shared_ptr<func_kind>>(
+                           varsym->kind))
+                  {
+                     chplx::util::dout
+                           << "734 Adding OnLocaleVarsUsedInExpr : " << identifier
+                           << "Kind: " << varsym->kind.index()
+                           << " to current statements" << std::endl;
+
+                     chplx::util::dout << "Scope ID: " << isInsideOn
+                                 << " SymbolTableRef ID: " << symbolTableRef->id
+                                 << " SymbolTableRef ID: " << symbolTable.symbolTableRef->id
+                                 << " varsym ID: " << varsym->scopeId
+                                 << std::endl;
+                     currentOnExpr->OnLocaleVarsUsedInExpr.emplace_back(
+                           VariableExpression{std::make_shared<Symbol>(*varsym)});
+                  }
+                  else if (varsym &&
+                      !std::holds_alternative<std::shared_ptr<func_kind>>(
+                          varsym->kind) &&
+                      varsym->identifier != "here")
+                  {
+                     chplx::util::dout << "784 Skipping OnLocaleVarsUsedInExpr : "
+                               << identifier << " isInsideOn: " << isInsideOn
+                               << " varsym scope ID: " << varsym->scopeId
+                               << std::endl;
+                  }
+                  else if (varsym &&
+                      std::holds_alternative<std::shared_ptr<func_kind>>(
+                          varsym->kind))
+                  {
+                     chplx::util::dout << "1016" << std::endl;
+                     std::shared_ptr<func_kind>& fk =
+                         std::get<std::shared_ptr<func_kind>>(varsym->kind);
+                     // symbolTableRef = symbolTable.lut[fk->lutId];
+
+                     // chplx::util::dout << "847\n";
+                     // cStmts->emplace_back(
+                     //     std::make_shared<FunctionCallExpression>(
+                     //         FunctionCallExpression{{symbolTableRef->id},
+                     //             *varsym, {}, emitChapelLine(ast),
+                     //             symbolTable}));
+                     // auto& fndecl =
+                     //     std::get<std::shared_ptr<FunctionCallExpression>>(
+                     //         cStmts->back());
+                     // curStmts.push_back(&fndecl->arguments);
+                     return true;
+                  }
+                  chplx::util::dout << "1001 Scope ID: " << varsym->scopeId
+                            << " SymbolTableRef ID: " << symbolTable.symbolTableRef->id
+                            << " inssideOn counter ID: " << isInsideOn
+                            << std::endl;
+                 varsym->scopeId = symbolTable.symbolTableRef->id;
+                 cStmts->emplace_back(
+                     VariableExpression{std::make_shared<Symbol>(*varsym)});
+               }
+               else
+               {
+                  if(cStmts->size())
+                  chplx::util::dout << "935 cStmts kind: " << cStmts->back().index() << std::endl;
+                 if (cStmts->size() &&
+                     std::holds_alternative<ArrayDeclarationExpression>(
+                         cStmts->back()))
+                 {
+                    cStmts->emplace_back(LiteralExpression{int_kind{}, ast});
+                 }
+                 else if (cStmts->size() &&
+                     std::holds_alternative<LiteralExpression>(cStmts->back()))
+                 {
+                    cStmts->emplace_back(
+                        VariableExpression{std::make_shared<Symbol>(*varsym)});
+                 }
+               //   else{
+               //    cStmts->emplace_back(
+               //          VariableExpression{std::make_shared<Symbol>(*varsym)});
+               //   }
+               }
+               
+               chplx::util::dout << "920\n";
           }
           else {
              std::optional< std::pair< std::map<std::string, Symbol>::iterator, std::map<std::string, Symbol>::iterator > > fnsym =
@@ -470,8 +1092,14 @@ bool ProgramTreeBuildingVisitor::enter(const uast::AstNode * ast) {
                        itr->first.substr(0, split == std::string::npos ? itr->first.size() : split);
 
                     if(fnident.size() == identifier.size() && fnident.substr(0, identifier.size()) == identifier) {
+                        if(itr->second.identifier.find('|') != std::string::npos) {
+                           chplx::util::dout << "Skipping symbol with '|' in identifier: " << itr->second.identifier << std::endl;
+                           continue;
+                        }
                         cStmts->emplace_back(VariableExpression{std::make_shared<Symbol>(itr->second)});
                         break;
+                    }else{
+                        chplx::util::dout << "Skipping symbol: " << itr->second.identifier << " does not match identifier: " << identifier << std::endl;
                     }
                 }
              }
@@ -525,6 +1153,20 @@ bool ProgramTreeBuildingVisitor::enter(const uast::AstNode * ast) {
           if(varsym) {
              std::shared_ptr<CoforallLoopExpression> & fl =
                 std::get<std::shared_ptr<CoforallLoopExpression>>(curStmts[curStmts.size()-2]->back());
+
+             std::shared_ptr<func_kind> & fc = std::get<std::shared_ptr<func_kind>>(fl->symbol.kind);
+
+             //if(!(fl->indexSet)) {
+             //   fl->indexSet = fc->args[0];
+             //}
+          }
+       }
+       else if (1 < curStmts.size() && std::holds_alternative<std::shared_ptr<OnExpression>>( curStmts[curStmts.size()-2]->back() ) ) {
+          std::optional<Symbol> varsym =
+             symbolTable.find(symbolTableRef->id, std::string{"on_" + emitChapelLine(ast)});
+          if(varsym) {
+             std::shared_ptr<OnExpression> & fl =
+                std::get<std::shared_ptr<OnExpression>>(curStmts[curStmts.size()-2]->back());
 
              std::shared_ptr<func_kind> & fc = std::get<std::shared_ptr<func_kind>>(fl->symbol.kind);
 
@@ -610,6 +1252,13 @@ bool ProgramTreeBuildingVisitor::enter(const uast::AstNode * ast) {
     case asttags::IntLiteral:
     {
        std::vector<Statement> * cStmts = curStmts.back();
+
+       if(1 < curStmts.size() )
+        chplx::util::dout << "Intliteral CurStmts kind: " << curStmts[curStmts.size()-2]->back().index() << std::endl;
+
+       if(cStmts->size())
+       chplx::util::dout << "Intliteral cStmts kind: " << cStmts->back().index() << std::endl;
+
        if (1 < curStmts.size() && std::holds_alternative<std::shared_ptr<BinaryOpExpression>>( curStmts[curStmts.size()-2]->back() ) ) {
            if(0 < cStmts->size() && std::holds_alternative<TupleDeclarationLiteralExpression>( cStmts->back() )) {
               return true;
@@ -651,13 +1300,65 @@ bool ProgramTreeBuildingVisitor::enter(const uast::AstNode * ast) {
           std::shared_ptr<CoforallLoopExpression> & fle =
              std::get<std::shared_ptr<CoforallLoopExpression>>(curStmts[curStmts.size()-2]->back());
 
+           chplx::util::dout << "Coforall indexset size: " << fle->indexSet.size() << std::endl;
+           chplx::util::dout << "Coforall indexset size: " << (fle->indexSet.size() ?  std::holds_alternative<std::shared_ptr<BinaryOpExpression>>(fle->indexSet.back()) : 0) << std::endl;
+
           if(fle->indexSet.size() && std::holds_alternative<std::shared_ptr<BinaryOpExpression>>(fle->indexSet.back())) {
              auto & bo = std::get<std::shared_ptr<BinaryOpExpression>>(fle->indexSet.back());
              bo->statements.emplace_back(LiteralExpression{int_kind{}, ast});
           }
           else {
+             if(fle->indexSet.size() && std::holds_alternative<VariableExpression>(fle->indexSet.back())){
+               auto var = std::get<VariableExpression>(fle->indexSet.back());
+               chplx::util::dout << "Coforall index: " << var.sym->identifier << std::endl;
+               if(var.sym->identifier == "Locales"){
+                  cStmts->emplace_back(LiteralExpression{int_kind{}, ast});
+                  return true;
+               }
+             }else{
+               if(fle->indexSet.size())
+               chplx::util::dout << "Coforall index set kind: " << fle->indexSet.back().index() << std::endl;
+             }
              fle->indexSet.emplace_back(LiteralExpression{int_kind{}, ast});
           }
+       }
+       else if(1 < curStmts.size() && std::holds_alternative<std::shared_ptr<OnExpression>>(curStmts[curStmts.size()-2]->back())) {
+            chplx::util::dout << "Int Literal : " << int_kind::value(ast) << std::endl;
+            chplx::util::dout << "Kind : " <<  cStmts->back().index() << std::endl;
+            if (0 < cStmts->size() &&
+                std::holds_alternative<std::shared_ptr<FunctionCallExpression>>(
+                    cStmts->back()))
+            {
+             std::shared_ptr<FunctionCallExpression>& fce =
+                 std::get<std::shared_ptr<FunctionCallExpression>>(
+                     cStmts->back());
+             fce->arguments.push_back(LiteralExpression{int_kind{}, ast});
+            }
+            else if (0 < cStmts->size() &&
+                std::holds_alternative<ScalarDeclarationExpression>(
+                    cStmts->back()))
+            {
+             auto sde = std::get<ScalarDeclarationExpression>(cStmts->back());
+             cStmts->pop_back();
+             cStmts->push_back(ScalarDeclarationLiteralExpression{
+                 {{sde.scopeId}, sde.identifier, int_kind{}, sde.chplLine,
+                     sde.qualifier, sde.config},
+                 {ast}});
+            }
+            else if (0 < cStmts->size() &&
+                std::holds_alternative<ScalarDeclarationLiteralExpression>(
+                    cStmts->back()))
+            {
+             auto& sle =
+                 std::get<ScalarDeclarationLiteralExpression>(cStmts->back());
+             sle.literalValue.push_back(ast);
+            }
+            else
+            {
+               chplx::util::dout << "Adding int literal: " <<  std::endl;
+             cStmts->emplace_back(LiteralExpression{int_kind{}, ast});
+            }
+             return true;
        }
        else if(0 < cStmts->size() && std::holds_alternative<std::shared_ptr<FunctionCallExpression>>(cStmts->back())) {
           std::shared_ptr<FunctionCallExpression> & fce =
@@ -678,6 +1379,28 @@ bool ProgramTreeBuildingVisitor::enter(const uast::AstNode * ast) {
           sle.literalValue.push_back(ast);
 //          sle.kind = int_kind{};
        }
+      //  else if (0 < cStmts->size() &&
+      //      std::holds_alternative<VariableExpression>(cStmts->back()))
+      //  {
+      //     auto scalarDecl = std::get<VariableExpression>(cStmts->back());
+
+      //     cStmts->pop_back();
+      //     cStmts->emplace_back(std::make_shared<BinaryOpExpression>(
+      //         BinaryOpExpression{{{symbolTableRef->id}, "=", ast}, {}}));
+
+      //     auto& bo =
+      //         std::get<std::shared_ptr<BinaryOpExpression>>(cStmts->back());
+      //     bo->statements.emplace_back(
+      //         std::make_shared<ScalarDeclarationExprExpression>(
+      //             ScalarDeclarationExprExpression{
+      //                 {{scalarDecl.sym->scopeId}, scalarDecl.sym->identifier,
+      //                     scalarDecl.sym->kind, emitChapelLine(ast),
+      //                     scalarDecl.sym->kindqualifier,
+      //                     scalarDecl.sym->isConfig},
+      //                 {}}));
+      //     //  curStmts.push_back(&bo->statements);
+      //  }
+
 /*
        else if(0 < cStmts->size() && std::holds_alternative<TupleDeclarationLiteralExpression>(cStmts->back())) {
           //auto & sle = std::get<TupleDeclarationLiteralExpression>(cStmts->back());
@@ -737,12 +1460,35 @@ bool ProgramTreeBuildingVisitor::enter(const uast::AstNode * ast) {
     case asttags::StringLiteral:
     {
        std::vector<Statement> * cStmts = curStmts.back();
+       chplx::util::dout << "StringLiteral: " << string_kind::value(ast) << std::endl;
+       if (1 < curStmts.size())
+           chplx::util::dout << "Kind: "
+                     << curStmts[curStmts.size() - 2]->back().index()
+                     << std::endl;
        if (1 < curStmts.size() && std::holds_alternative<std::shared_ptr<BinaryOpExpression>>( curStmts[curStmts.size()-2]->back() ) ) {
           cStmts->emplace_back(LiteralExpression{string_kind{}, ast});
        }
-       else if(0 < cStmts->size() && std::holds_alternative<std::shared_ptr<FunctionCallExpression>>(cStmts->back())) {
-          std::shared_ptr<FunctionCallExpression> & fce =
-             std::get<std::shared_ptr<FunctionCallExpression>>(cStmts->back()); 
+       // uncommenting below will cause string literals to be in whatever calls happen to be
+       // at the end of the statement list, which is not what we want
+       // writeln("Hello", betad(1), "World");
+       // Enter writeln: you emit a FunctionCallExpression for writeln, then push its args-list onto curStmts.
+       // StringLiteral "Hello"->falls to the else-branch and goes into writeln's args.
+       // Enter betad(1): emit its call, push betad's args-list.
+       // IntLiteral 1->goes into betad's args.
+       // Exit betad: pop back to writeln's args-list.
+       // StringLiteral "World"->now:
+       // curStmts.back() is writeln's args (a vector containing "Hello" and the betad call).
+       // BUT cStmts->back() is the very last element of that list, which is the betad call.
+       // The special-case sees a FunctionCallExpression at the back, and so it wrongly appends "World" into betad's arguments instead of writeln's.
+       else if (1 < curStmts.size() &&
+           std::holds_alternative<std::shared_ptr<FunctionCallExpression>>(
+               curStmts[curStmts.size() - 2]->back()))
+       {
+          chplx::util::dout << "1270 StringLiteral: " << string_kind::value(ast)
+                    << std::endl;
+          std::shared_ptr<FunctionCallExpression>& fce =
+              std::get<std::shared_ptr<FunctionCallExpression>>(
+                  curStmts[curStmts.size() - 2]->back());
           fce->arguments.push_back(LiteralExpression{string_kind{}, ast});
        }
        else if(0 < cStmts->size() && std::holds_alternative<std::shared_ptr<ReturnExpression>>(cStmts->back())) {
@@ -757,6 +1503,8 @@ bool ProgramTreeBuildingVisitor::enter(const uast::AstNode * ast) {
        }
 */
        else {
+         chplx::util::dout << "Cstmts back kind: " << cStmts->back().index() << std::endl;
+         chplx::util::dout << "1296 \n";
            cStmts->emplace_back(LiteralExpression{string_kind{}, ast});
        }
     }
@@ -772,6 +1520,80 @@ bool ProgramTreeBuildingVisitor::enter(const uast::AstNode * ast) {
        std::vector<Statement> * cStmts = curStmts.back();
 
        const FnCall* fc = dynamic_cast<const FnCall*>(ast);
+       std::string identifier{dynamic_cast<const Identifier*>(fc->calledExpression())->name().c_str()};
+
+       chplx::util::dout << "FnCall: " << identifier << std::endl;
+       if(curStmts.size() > 1 ) chplx::util::dout << "CurStmts kind: " << curStmts[curStmts.size()-2]->back().index() << std::endl;
+
+       if (curStmts.size() > 1 &&
+           std::holds_alternative<std::shared_ptr<ForLoopExpression>>(
+               curStmts[curStmts.size() - 2]->back()))
+       {
+           std::shared_ptr<ForLoopExpression>& fle =
+               std::get<std::shared_ptr<ForLoopExpression>>(
+                   curStmts[curStmts.size() - 2]->back());
+           std::optional<Symbol> varsym =
+               symbolTable.find(symbolTableRef->id, identifier);
+
+           if (fle->isArrayInitForLoop && pendingArrayForLoopSymbols.size() > 0)
+           {
+             auto arrayVarsym = pendingArrayForLoopSymbols.front();
+             pendingArrayForLoopSymbols.pop_front();
+             auto arrayIdentifier = arrayVarsym->identifier;
+
+             auto varsymInsideForLoop = arrayVarsym;
+             std::string iteratorName = fle->iterator->identifier;
+             auto arrayIdentifierForLoopExpression =
+                 arrayIdentifier + "(" + iteratorName + ")";
+
+             varsymInsideForLoop->kind = std::make_shared<func_kind>(func_kind{
+                 {symbolTable.symbolTableRef->id, {}, {}, {}}, true, false});
+
+             cStmts->emplace_back(std::make_shared<BinaryOpExpression>(
+                 BinaryOpExpression{{{symbolTableRef->id}, "=", ast}, {}}));
+             auto& bo =
+                 std::get<std::shared_ptr<BinaryOpExpression>>(cStmts->back());
+
+             bo->statements.emplace_back(
+
+                 VariableExpression{std::make_shared<Symbol>(Symbol{
+                     varsymInsideForLoop->kind,
+                     arrayIdentifierForLoopExpression,    // This is "arr(i)"
+                     {}, -1, false, symbolTableRef->id})});
+
+             {
+                std::optional<std::pair<std::map<std::string, Symbol>::iterator,
+                    std::map<std::string, Symbol>::iterator>>
+                    fsym =
+                        symbolTable.findPrefix(symbolTableRef->id, identifier);
+
+                auto itr = fsym->first;
+                for (; itr != fsym->second; ++itr)
+                {
+                    const auto split = itr->first.find('|');
+                    const std::string fnident = itr->first.substr(0,
+                        split == std::string::npos ? itr->first.size() : split);
+
+                    if (fnident.size() == identifier.size() &&
+                        fnident.substr(0, identifier.size()) == identifier)
+                    {
+                        bo->statements.emplace_back(
+                            std::make_shared<FunctionCallExpression>(
+                                FunctionCallExpression{{symbolTableRef->id},
+                                    itr->second, {}, emitChapelLine(ast),
+                                    symbolTable}));
+                        curStmts.push_back(
+                            &(std::get<std::shared_ptr<FunctionCallExpression>>(
+                                bo->statements.back())
+                                    ->arguments));
+                        break;
+                    }
+                }
+             }
+
+             return true;
+           }
+       }
 
        if (1 < curStmts.size() &&
            std::holds_alternative<std::shared_ptr<BinaryOpExpression>>( curStmts[curStmts.size()-2]->back() ) &&
@@ -800,7 +1622,6 @@ bool ProgramTreeBuildingVisitor::enter(const uast::AstNode * ast) {
            else { 
               auto rsym =
                 symbolTable.findPrefix(symbolTableRef->id, identifier);
-// HERE std::cout << "FNCALL2\t" << identifier << std::endl;
 
               auto itr = rsym->first;
               for(; itr != rsym->second; ++itr) {
@@ -810,11 +1631,6 @@ bool ProgramTreeBuildingVisitor::enter(const uast::AstNode * ast) {
                      itr->first.substr(0, split == std::string::npos ? itr->first.size() : split);
 
                   if(fnident.size() == identifier.size() && fnident.substr(0, identifier.size()) == identifier) {
-
-                  //auto pipeloc = itr->first.find('|');
-                  //std::string itrstr {(pipeloc == itr->first.npos) ? itr->first : itr->first.substr(0,pipeloc)};
-
-                  //if(itrstr.size() >= identifier.size() && itrstr == identifier) {
                       cStmts->emplace_back(
                          std::make_shared<FunctionCallExpression>(
                             FunctionCallExpression{{symbolTableRef->id}, {itr->second}, {}, emitChapelLine(ast), symbolTable}
@@ -834,6 +1650,7 @@ bool ProgramTreeBuildingVisitor::enter(const uast::AstNode * ast) {
               symbolTable.find(symbolTableRef->id, identifier);
 
            if(fnsym) { 
+               chplx::util::dout << "Function Call: " << identifier << " fnsym kind: " << fnsym->kind.index() << std::endl;
               if(std::holds_alternative<std::shared_ptr<tuple_kind>>(fnsym->kind) && 
                  0 == cStmts->size() &&
                  std::holds_alternative<std::shared_ptr<TupleDeclarationExprExpression>>(curStmts[curStmts.size()-2]->back())) {
@@ -873,11 +1690,66 @@ bool ProgramTreeBuildingVisitor::enter(const uast::AstNode * ast) {
               }
               else if(cStmts->size() && 
                  !std::holds_alternative<std::shared_ptr<cxxfunc_kind>>(fnsym->kind) &&
+                 identifier != "writeln" &&
                  std::holds_alternative<ScalarDeclarationLiteralExpression>(cStmts->back()) ) {
-
+                 chplx::util::dout << "Adding to scalar decl 1\n";
+                 chplx::util::dout << "Fn holds or not : "
+                           << std::holds_alternative<
+                                  std::shared_ptr<FunctionCallExpression>>(
+                                  cStmts->back())
+                           << std::endl;
                  ScalarDeclarationLiteralExpression stmt =
-                    std::get<ScalarDeclarationLiteralExpression>(cStmts->back());
-                 if(stmt.literalValue.size()) { return true; }
+                     std::get<ScalarDeclarationLiteralExpression>(
+                         cStmts->back());
+                 if (stmt.literalValue.size())
+                 {
+                      std::optional<
+                          std::pair<std::map<std::string, Symbol>::iterator,
+                              std::map<std::string, Symbol>::iterator>>
+                          fsym = symbolTable.findPrefix(
+                              symbolTableRef->id, identifier);
+                      assert(fsym);
+                      auto itr = fsym->first;
+                      for (; itr != fsym->second; ++itr)
+                      {
+                        const auto split = itr->first.find('|');
+                        const std::string fnident = itr->first.substr(0,
+                            split == std::string::npos ? itr->first.size() :
+                                                         split);
+
+                        if (fnident.size() == identifier.size() &&
+                            fnident.substr(0, identifier.size()) ==
+                                identifier &&
+                            !std::holds_alternative<std::shared_ptr<func_kind>>(
+                                itr->second.kind))
+                        {
+                           chplx::util::dout << "Found function: " << itr->first
+                                     << std::endl;
+                           chplx::util::dout << "Adding to scalar decl " << identifier
+                                     << std::endl;
+                           chplx::util::dout << "Adding to scalar decl kind "
+                                     << itr->second.kind.index() << " val "
+                                     << std::holds_alternative<
+                                            std::shared_ptr<func_kind>>(
+                                            itr->second.kind)
+                                     << std::endl;
+                           cStmts->emplace_back(
+                               std::make_shared<FunctionCallExpression>(
+                                   FunctionCallExpression{{symbolTableRef->id},
+                                       itr->second, {}, emitChapelLine(ast),
+                                       symbolTable}));
+                           curStmts.push_back(
+                               &(std::get<
+                                   std::shared_ptr<FunctionCallExpression>>(
+                                   cStmts->back())
+                                       ->arguments));
+                           break;
+                           return true;
+                        }
+                      }
+                 }
+
+                 chplx::util::dout << "Adding to scalar decl 2\n";
 
                  cStmts->pop_back();
                  cStmts->emplace_back(
@@ -903,6 +1775,9 @@ bool ProgramTreeBuildingVisitor::enter(const uast::AstNode * ast) {
               return false;
            }
            else {
+            chplx::util::dout << "1523 Function Call: " << identifier << std::endl;
+             if(cStmts->size() )
+             chplx::util::dout << "cStmts kind: " << cStmts->back().index() << std::endl;
               if(0 < cStmts->size() && std::holds_alternative<ScalarDeclarationExpression>(cStmts->back())) {
                  auto scalarDecl = std::get<ScalarDeclarationExpression>(cStmts->back());
 
@@ -982,6 +1857,7 @@ bool ProgramTreeBuildingVisitor::enter(const uast::AstNode * ast) {
                  }
               }
               else if(0 < cStmts->size() && std::holds_alternative<std::shared_ptr<ScalarDeclarationExprExpression>>(cStmts->back())) {
+                 chplx::util::dout << "1848" << std::endl;  
                  std::shared_ptr<ScalarDeclarationExprExpression> stmt =
                     std::get<std::shared_ptr<ScalarDeclarationExprExpression>>(cStmts->back());
 
@@ -1015,24 +1891,73 @@ bool ProgramTreeBuildingVisitor::enter(const uast::AstNode * ast) {
               }   
               else if(0 < cStmts->size() && std::holds_alternative<VariableExpression>(cStmts->back())) {
                  //cStmts->pop_back();
+                 chplx::util::dout << "1636\n";
 
-                 if(std::holds_alternative<VariableExpression>(cStmts->back())) {
-                    auto scalarDecl = std::get<VariableExpression>(cStmts->back());
+                 if (std::holds_alternative<VariableExpression>(cStmts->back()))
+                 {
+                    chplx::util::dout << "1639\n";
+                    auto scalarDecl =
+                        std::get<VariableExpression>(cStmts->back());
+                    chplx::util::dout << "kind: " << scalarDecl.sym->kind.index()
+                              << std::endl;
+                    chplx::util::dout << "isTypeKind: " << scalarDecl.sym->isTypeKind()
+                              << std::endl;
 
-                    cStmts->pop_back();
-                    cStmts->emplace_back(
-                       std::make_shared<BinaryOpExpression>(BinaryOpExpression{
-                           {{symbolTableRef->id}, "=", ast}, {}
-                       })
-                    );
+                    auto itr = fsym->first;
+                    for (; itr != fsym->second; ++itr)
+                    {
+                       const auto split = itr->first.find('|');
+                       const std::string fnident = itr->first.substr(0,
+                           split == std::string::npos ? itr->first.size() :
+                                                        split);
 
-                    auto & bo = std::get<std::shared_ptr<BinaryOpExpression>>(cStmts->back());
-                    bo->statements.emplace_back(
-                       std::make_shared<ScalarDeclarationExprExpression>(ScalarDeclarationExprExpression
-                          {{{scalarDecl.sym->scopeId}, scalarDecl.sym->identifier, scalarDecl.sym->kind, emitChapelLine(ast), scalarDecl.sym->kindqualifier, scalarDecl.sym->isConfig}, {}}
-                    ));
+                       if (fnident.size() == identifier.size() &&
+                           fnident.substr(0, identifier.size()) == identifier)
+                       {
+                          chplx::util::dout << "1905 Adding Function Call: " << identifier
+                                    << std::endl;
+                          cStmts->emplace_back(
+                              std::make_shared<FunctionCallExpression>(
+                                  FunctionCallExpression{{symbolTableRef->id},
+                                      itr->second, {}, emitChapelLine(ast),
+                                      symbolTable}));
+                          curStmts.push_back(&(
+                              std::get<std::shared_ptr<FunctionCallExpression>>(
+                                  cStmts->back())
+                                  ->arguments));
+                          break;
+                       }
+                    }
+
+                  //   if (!scalarDecl.sym->isTypeKind())
+                  //   {
+                  //      cStmts->pop_back();
+                  //      cStmts->emplace_back(
+                  //          std::make_shared<BinaryOpExpression>(
+                  //              BinaryOpExpression{
+                  //                  {{symbolTableRef->id}, "=", ast}, {}}));
+
+                  //      auto& bo = std::get<std::shared_ptr<BinaryOpExpression>>(
+                  //          cStmts->back());
+                  //      bo->statements.emplace_back(
+                  //          std::make_shared<ScalarDeclarationExprExpression>(
+                  //              ScalarDeclarationExprExpression{
+                  //                  {{scalarDecl.sym->scopeId},
+                  //                      scalarDecl.sym->identifier,
+                  //                      scalarDecl.sym->kind,
+                  //                      emitChapelLine(ast),
+                  //                      scalarDecl.sym->kindqualifier,
+                  //                      scalarDecl.sym->isConfig},
+                  //                  {}}));
+                  //   }
+                  //   else
+                  //   {
+                  //    //   cStmts->pop_back();
+                  //     return true;
+                  //   }
                  }
-                 else {
+                 else if(std::holds_alternative<ScalarDeclarationLiteralExpression>(cStmts->back())){
+                    chplx::util::dout << "1916\n";
                     auto scalarDecl = std::get<ScalarDeclarationLiteralExpression>(cStmts->back());
 
                     cStmts->pop_back();
@@ -1047,25 +1972,38 @@ bool ProgramTreeBuildingVisitor::enter(const uast::AstNode * ast) {
                           {{{scalarDecl.scopeId}, scalarDecl.identifier, scalarDecl.kind, scalarDecl.chplLine, scalarDecl.qualifier, scalarDecl.config}, {}}
                     ));
                  }
-
-                 auto & bo = std::get<std::shared_ptr<BinaryOpExpression>>(cStmts->back());
-                 auto itr = fsym->first;
-                 for(; itr != fsym->second; ++itr) {
+                 else if (std::holds_alternative<
+                         std::shared_ptr<BinaryOpExpression>>(cStmts->back()))
+                 {
+                  chplx::util::dout << "1934" << std::endl;
+                    auto& bo = std::get<std::shared_ptr<BinaryOpExpression>>(
+                        cStmts->back());
+                    auto itr = fsym->first;
+                    for (; itr != fsym->second; ++itr)
+                    {
                     const auto split = itr->first.find('|');
-                    const std::string fnident =
-                       itr->first.substr(0, split == std::string::npos ? itr->first.size() : split);
+                    const std::string fnident = itr->first.substr(0,
+                        split == std::string::npos ? itr->first.size() : split);
 
-                    if(fnident.size() == identifier.size() && fnident.substr(0, identifier.size()) == identifier) {
-                       bo->statements.emplace_back(
-                          std::make_shared<FunctionCallExpression>(
-                             FunctionCallExpression{{symbolTableRef->id}, itr->second, {}, emitChapelLine(ast), symbolTable}
-                       ));
-                       curStmts.push_back(&(std::get<std::shared_ptr<FunctionCallExpression>>(bo->statements.back())->arguments));
-                       break;
+                    if (fnident.size() == identifier.size() &&
+                        fnident.substr(0, identifier.size()) == identifier)
+                    {
+                          bo->statements.emplace_back(
+                              std::make_shared<FunctionCallExpression>(
+                                  FunctionCallExpression{{symbolTableRef->id},
+                                      itr->second, {}, emitChapelLine(ast),
+                                      symbolTable}));
+                          curStmts.push_back(&(
+                              std::get<std::shared_ptr<FunctionCallExpression>>(
+                                  bo->statements.back())
+                                  ->arguments));
+                          break;
+                    }
                     }
                  }
               }
               else {
+                 chplx::util::dout  << "1687\n";
                  auto itr = fsym->first;
                  for(; itr != fsym->second; ++itr) {
                     const auto split = itr->first.find('|');
@@ -1073,6 +2011,7 @@ bool ProgramTreeBuildingVisitor::enter(const uast::AstNode * ast) {
                        itr->first.substr(0, split == std::string::npos ? itr->first.size() : split);
 
                     if(fnident.size() == identifier.size() && fnident.substr(0, identifier.size()) == identifier) {
+                       chplx::util::dout << "Adding Function Call: " << identifier << std::endl;
                        cStmts->emplace_back(
                           std::make_shared<FunctionCallExpression>(
                              FunctionCallExpression{{symbolTableRef->id}, itr->second, {}, emitChapelLine(ast), symbolTable}
@@ -1096,6 +2035,100 @@ bool ProgramTreeBuildingVisitor::enter(const uast::AstNode * ast) {
                return false;
            }
 
+           chplx::util::dout << "Identifier Array index invoked: " << identifier << std::endl;
+
+           {
+               std::string identifier{
+                   dynamic_cast<const Identifier*>(fc->calledExpression())
+                       ->name()
+                       .c_str()};
+               std::optional<std::pair<std::map<std::string, Symbol>::iterator,
+                   std::map<std::string, Symbol>::iterator>>
+                   fsym =
+                       symbolTable.findPrefix(symbolTableRef->id, identifier);
+               if (0 < cStmts->size() &&
+                   std::holds_alternative<ScalarDeclarationExpression>(
+                       cStmts->back()))
+               {
+                 auto scalarDecl =
+                     std::get<ScalarDeclarationExpression>(cStmts->back());
+
+                 cStmts->pop_back();
+                 cStmts->emplace_back(std::make_shared<BinaryOpExpression>(
+                     BinaryOpExpression{{{symbolTableRef->id}, "=", ast}, {}}));
+                 auto& bo = std::get<std::shared_ptr<BinaryOpExpression>>(
+                     cStmts->back());
+                 bo->statements.emplace_back(
+                     std::make_shared<ScalarDeclarationExprExpression>(
+                         ScalarDeclarationExprExpression{
+                             {{scalarDecl.scopeId}, scalarDecl.identifier,
+                                 scalarDecl.kind, scalarDecl.chplLine,
+                                 scalarDecl.qualifier, scalarDecl.config},
+                             {}}));
+
+                 auto itr = fsym->first;
+
+                 for (; itr != fsym->second; ++itr)
+                 {
+                    const auto split = itr->first.find('|');
+                    const std::string fnident = itr->first.substr(0,
+                        split == std::string::npos ? itr->first.size() : split);
+
+                    if (fnident.size() == identifier.size() &&
+                        fnident.substr(0, identifier.size()) == identifier)
+                    {
+                       bo->statements.emplace_back(
+                           std::make_shared<FunctionCallExpression>(
+                               FunctionCallExpression{{symbolTableRef->id},
+                                   itr->second, {}, emitChapelLine(ast),
+                                   symbolTable}));
+                       curStmts.push_back(
+                           &(std::get<std::shared_ptr<FunctionCallExpression>>(
+                               bo->statements.back())
+                                   ->arguments));
+                       break;
+                    }
+                 }
+                 return true;
+               }
+           }
+           chplx::util::dout << "here\n";
+           if (curStmts.size() > 2 && curStmts[curStmts.size() - 2]->size() &&
+               std::holds_alternative<std::shared_ptr<OnExpression>>(
+                   curStmts[curStmts.size() - 2]->back()))
+           {
+               chplx::util::dout << "2095" << std::endl;
+               auto OnExpr = std::get<std::shared_ptr<OnExpression>>(
+                   curStmts[curStmts.size() - 2]->back());
+               if (!OnExpr->OnLocale)
+               {
+                 chplx::util::dout << "Identifier On Locale: " << identifier
+                           << std::endl;
+                  
+                 assert(varsym.has_value() && "This symbol should exist");
+                 OnExpr->OnLocale = *varsym;
+                 OnExpr->OnLocaleVarExpr.emplace_back(
+                     VariableExpression{std::make_shared<Symbol>(
+                         Symbol{varsym->kind, varsym->identifier, {}, -1,
+                                false, symbolTableRef->id})});
+
+                  assert(false && "Currently we do not support direct array indexing on OnLocale");
+                 return false;
+               }
+           }
+         //   chplx::util::dout << "IsInsideOn " << isInsideOn << std::endl;
+         //   chplx::util::dout << "ScopeId: " << symbolTableRef->id << std::endl;
+         //   chplx::util::dout << "varsym->scopeId: " << varsym->scopeId << std::endl;
+         //   if (isInsideOn &&
+         //       (varsym->scopeId <= isInsideOn ||
+         //           symbolTableRef->id >= varsym->scopeId) &&
+         //       identifier != "here")
+         //   {
+         //       chplx::util::dout << "2116 Adding OnLocaleVarsUsedInExpr : " << varsym->identifier
+         //                 << " to current statements kind: " << varsym->kind.index() << std::endl;
+         //       currentOnExpr->OnLocaleVarsUsedInExpr.emplace_back(
+         //           VariableExpression{std::make_shared<Symbol>(*varsym)});
+         //   }
            cStmts->emplace_back(
               std::make_shared<FunctionCallExpression>(
                  FunctionCallExpression{{symbolTableRef->id}, {*varsym}, {}, emitChapelLine(ast), symbolTable}
@@ -1130,6 +2163,8 @@ bool ProgramTreeBuildingVisitor::enter(const uast::AstNode * ast) {
 
        std::vector<Statement> * cStmts = curStmts.back();
 
+       chplx::util::dout << "Binary encop second: " << encop->second << std::endl;
+
        switch(encop->second) {
            case 0: // =
            case 1: // +
@@ -1138,6 +2173,8 @@ bool ProgramTreeBuildingVisitor::enter(const uast::AstNode * ast) {
            case 4: // /
            case 5: // %
            case 7: // ==
+           case 9: // <<
+           case 10: // >>
            case 8: // <=>
            {
                if(0 < cStmts->size() && std::holds_alternative<std::shared_ptr<ScalarDeclarationExprExpression>>(cStmts->back())) {
@@ -1230,8 +2267,10 @@ bool ProgramTreeBuildingVisitor::enter(const uast::AstNode * ast) {
                      arrayIdentifier = arrayVarsym->identifier;
 
                      auto varsymInsideForLoop = arrayVarsym;
-                     std::string iteratorName = fle->iterator.identifier;
+
+                     std::string iteratorName = fle->iterator->identifier;
                      auto arrayIdentifierForLoopExpression = arrayIdentifier + "(" + iteratorName + ")";
+
                      std::vector<Statement> * cStmts = curStmts.back();
                      varsymInsideForLoop->kind = std::make_shared<func_kind>(func_kind{{
                            symbolTable.symbolTableRef->id, {}, {}, {}}, true, false});
@@ -1323,6 +2362,26 @@ bool ProgramTreeBuildingVisitor::enter(const uast::AstNode * ast) {
                      curStmts.push_back(&(nbo->statements));
                   }
                }
+               else if(1 < curStmts.size() && curStmts[curStmts.size()-2]->size() && std::holds_alternative<std::shared_ptr<OnExpression>>(curStmts[curStmts.size()-2]->back())) {
+                  std::shared_ptr<OnExpression> & one =
+                     std::get<std::shared_ptr<OnExpression>>(curStmts[curStmts.size()-2]->back());
+
+                  // if(one->OnLocaleVarExpr.size() < 1) {
+                  //    assert(false);
+                  //    one->OnLocaleVarExpr.emplace_back(std::make_shared<BinaryOpExpression>(BinaryOpExpression{
+                  //       {{symbolTableRef->id}, identifier, ast}, {}
+                  //    }));
+                  // }
+                  // else {
+                     cStmts->emplace_back(
+                        std::make_shared<BinaryOpExpression>(BinaryOpExpression{
+                           {{symbolTableRef->id}, identifier, ast}, {}
+                        })
+                     );
+                     auto & nbo = std::get<std::shared_ptr<BinaryOpExpression>>(cStmts->back());
+                     curStmts.push_back(&(nbo->statements));
+                  // }
+               }
                else {
                   cStmts->emplace_back(
                      std::make_shared<BinaryOpExpression>(BinaryOpExpression{
@@ -1388,12 +2447,16 @@ bool ProgramTreeBuildingVisitor::enter(const uast::AstNode * ast) {
     }
     break;
     case asttags::Zip:
+    isInsideZip = true;
     break;
     case asttags::END_Call:
     break;
     case asttags::MultiDecl:
     break;
     case asttags::TupleDecl:
+    {
+    ++isInsideForallTuple;
+    }
     break;
     case asttags::ForwardingDecl:
     break;
@@ -1416,12 +2479,27 @@ bool ProgramTreeBuildingVisitor::enter(const uast::AstNode * ast) {
        symbolTable.find(symbolTableRef->id, identifier, varsym);
        bool stmt = true;
 
+       chplx::util::dout << "Variable identifier: " << identifier << std::endl;
+       if(curStmts.size() > 1 && curStmts[curStmts.size()-2]->size())
+       chplx::util::dout << "curStmts kind: " << curStmts[curStmts.size()-2]->back().index() << std::endl;
+       for(auto& vec: curStmts) {
+         for(auto& stmt: *vec) {
+           chplx::util::dout << "stmt kind: " << stmt.index() << std::endl;
+         }
+       }
+       std::vector<Statement> * cStmts = curStmts.back();
+       if(cStmts && cStmts->size()) chplx::util::dout << "cStmts kind: " << cStmts->back().index() << std::endl;
+
        if (1 < curStmts.size() && std::holds_alternative<std::shared_ptr<ForLoopExpression>>( curStmts[curStmts.size()-2]->back() ) ) {
            std::shared_ptr<ForLoopExpression> & fl =
                std::get<std::shared_ptr<ForLoopExpression>>(curStmts[curStmts.size()-2]->back());
 
-           fl->iterator = *varsym;
-           stmt = false;
+           if (!fl->iterator)
+           {
+             fl->iterator = *varsym;
+             stmt = false;
+           }
+
 
            if (fl->isArrayInitForLoop)
            {
@@ -1429,58 +2507,125 @@ bool ProgramTreeBuildingVisitor::enter(const uast::AstNode * ast) {
              // We need to find the target array variable from the parent scope
              // Look for array variable in the parent scope that's being initialized
              // Search in parent scope for array variables
-             auto parentScopeId = symbolTable.parentSymbolTableId;
-             std::optional<std::pair<std::map<std::string, Symbol>::iterator,
-                 std::map<std::string, Symbol>::iterator>>
-                 allSymbols = symbolTable.findPrefix(parentScopeId, "");
-             if (allSymbols.has_value())
+
+             const auto parentScopeId = symbolTable.parentSymbolTableId;
+             const auto curScopeId = symbolTable.symbolTableRef->id;
+             const auto maxScope = std::max(parentScopeId, curScopeId);
+             const auto minScope = std::min(parentScopeId, curScopeId);
+             for (int scope = minScope; scope <= maxScope; ++scope)
              {
-                     for (auto it = allSymbols->first; it != allSymbols->second;
-                          ++it)
+                     std::optional<
+                         std::pair<std::map<std::string, Symbol>::iterator,
+                             std::map<std::string, Symbol>::iterator>>
+                         allSymbolsParScope = symbolTable.findPrefix(scope, "");
+                     if (allSymbolsParScope.has_value())
                      {
-                        if (std::holds_alternative<std::shared_ptr<func_kind>>(
-                                it->second.kind))
+                        for (auto it = allSymbolsParScope->first;
+                             it != allSymbolsParScope->second; ++it)
                         {
-                       auto func_sym = std::get<std::shared_ptr<func_kind>>(
-                           it->second.kind);
-                       if (func_sym->isArrayInitForLoop)
+                       if (std::holds_alternative<std::shared_ptr<func_kind>>(
+                               it->second.kind))
                        {
-                          const auto& candidate = func_sym->arraySym;
-                          const auto& candidateArrIdentifier = func_sym->arrayIdentifier;
-
-                          if (pendingArrayForLoopSymbolsMap.find(candidateArrIdentifier) !=
-                              pendingArrayForLoopSymbolsMap.end())
+                          auto func_sym = std::get<std::shared_ptr<func_kind>>(
+                              it->second.kind);
+                          if (func_sym->isArrayInitForLoop)
                           {
-                              // Already added this symbol
-                              continue;
-                          }
-                          pendingArrayForLoopSymbolsMap[candidateArrIdentifier] = true;
+                              const auto& candidate = func_sym->arraySym;
+                              const auto& candidateArrIdentifier =
+                                  func_sym->arrayIdentifier;
 
-                          pendingArrayForLoopSymbols.push_back(candidate);
+                              if (pendingArrayForLoopSymbolsMap.find(
+                                      candidateArrIdentifier) !=
+                                  pendingArrayForLoopSymbolsMap.end())
+                              {
+                                  // Already added this symbol
+                                  continue;
+                              }
+                              pendingArrayForLoopSymbolsMap
+                                  [candidateArrIdentifier] = true;
+
+                              pendingArrayForLoopSymbols.push_back(candidate);
+                          }
                        }
                         }
                      }
              }
+
+             assert(pendingArrayForLoopSymbols.size()); // Should have atleast one element
            }
        }
        else if (1 < curStmts.size() && std::holds_alternative<std::shared_ptr<ForallLoopExpression>>( curStmts[curStmts.size()-2]->back() ) ) {
            std::shared_ptr<ForallLoopExpression> & fl =
                std::get<std::shared_ptr<ForallLoopExpression>>(curStmts[curStmts.size()-2]->back());
-
-           fl->iterator = *varsym;
-           stmt = false;
+            if(isInsideForallTuple == 2){
+               fl->isZippedIter = true;
+            }
+            if (fl->iterator.size() && !fl->iterator[0] &&
+                isInsideForallTuple != 2)
+            {
+               fl->iterator[0] = *varsym;
+               stmt = false;
+            }
+            else
+            {
+               fl->iterator.emplace_back(*varsym);
+               stmt = false;
+            }
+           chplx::util::dout << "Inside Forall : " << isInsideForallTuple << " stmt : " << stmt << std::endl;
        }
        else if (1 < curStmts.size() && std::holds_alternative<std::shared_ptr<CoforallLoopExpression>>( curStmts[curStmts.size()-2]->back() ) ) {
            std::shared_ptr<CoforallLoopExpression> & fl =
                std::get<std::shared_ptr<CoforallLoopExpression>>(curStmts[curStmts.size()-2]->back());
-
-           fl->iterator = *varsym;
-           stmt = false;
+            chplx::util::dout << "Does iterator have value? " << fl->iterator.has_value() << "\n";
+            if (!fl->iterator)
+            {
+             fl->iterator = *varsym;
+             stmt = false;
+            }
        }
+       else if (1 < curStmts.size() && std::holds_alternative<std::shared_ptr<OnExpression>>( curStmts[curStmts.size()-2]->back() ) ) {
+           std::shared_ptr<OnExpression> & one =
+               std::get<std::shared_ptr<OnExpression>>(curStmts[curStmts.size()-2]->back());
 
+            chplx::util::dout << "Variabl " << identifier <<   " \n";
+           if (one->OnLocale)
+           {
+             stmt = true;
+           }
+           else
+           {
+             one->OnLocale = *varsym;
+             stmt = false;
+           }
+           chplx::util::dout << "stmt : " <<stmt << "\n";
+      }
+      chplx::util::dout << "varsym kind : " << varsym->kind.index() << " does varsym hold val: " << varsym.has_value() << "\n";
+      chplx::util::dout << "stmt : " << stmt << "\n";
+      chplx::util::dout << "IsInsideOn: " << isInsideOn << std::endl;
        if(stmt) {
+         if(isInsideForallTuple == 2){
+            std::vector<Statement> * cStmts = curStmts.back();
+
+             // this situation is not likely to happen
+             //
+             chplx::util::dout << "2225\n";
+             if(varsym->literal.size() ) {
+                   std::visit(
+                      VariableLiteralVisitor{symbolTableRef->id, identifier, *varsym, *cStmts, br, ctx, ast},
+                      varsym->kind
+                   );
+                }
+                else {
+                   std::visit(
+                   VariableVisitor{symbolTableRef->id, identifier, *varsym, *cStmts, br, ctx, ast},
+                   varsym->kind
+                   );
+             }
+             return true;
+         }
           if(varsym &&
              std::holds_alternative<std::shared_ptr<array_kind>>(varsym->kind) &&
+             std::get<std::shared_ptr<array_kind>>(varsym->kind)->args.size() &&
              std::holds_alternative<std::shared_ptr<domain_kind>>(std::get<std::shared_ptr<array_kind>>(varsym->kind)->args.back().kind) &&
              std::holds_alternative<std::shared_ptr<range_kind>>(
                 std::get<std::shared_ptr<domain_kind>>(std::get<std::shared_ptr<array_kind>>(varsym->kind)->args.back().kind)->args.back().kind
@@ -1489,6 +2634,7 @@ bool ProgramTreeBuildingVisitor::enter(const uast::AstNode * ast) {
 
              // this situation is not likely to happen
              //
+             chplx::util::dout << "2173\n";
              if(varsym->literal.size() ||
                 std::holds_alternative<std::shared_ptr<kind_node_type>>(std::get<std::shared_ptr<array_kind>>(varsym->kind)->retKind) ) {
                    std::visit(
@@ -1510,7 +2656,9 @@ bool ProgramTreeBuildingVisitor::enter(const uast::AstNode * ast) {
           }
           else if(varsym &&
              std::holds_alternative<std::shared_ptr<array_kind>>(varsym->kind) &&
+             std::get<std::shared_ptr<array_kind>>(varsym->kind)->args.size() &&
              std::holds_alternative<std::shared_ptr<domain_kind>>(std::get<std::shared_ptr<array_kind>>(varsym->kind)->args.back().kind)) {
+               chplx::util::dout << "2197\n";
              std::vector<Statement> * cStmts = curStmts.back();
              auto & ak = std::get<std::shared_ptr<array_kind>>(varsym->kind);
              if(ak->args.size()) {
@@ -1521,6 +2669,7 @@ bool ProgramTreeBuildingVisitor::enter(const uast::AstNode * ast) {
           else if(varsym && std::holds_alternative<std::shared_ptr<tuple_kind>>(varsym->kind)) {
              std::shared_ptr<tuple_kind> & tk =
                 std::get<std::shared_ptr<tuple_kind>>(varsym->kind);
+               chplx::util::dout << "Tuple proc\n";
 
              if(0 < tk->args.size()) {
                std::vector<Statement> * cStmts = curStmts.back();
@@ -1541,8 +2690,12 @@ bool ProgramTreeBuildingVisitor::enter(const uast::AstNode * ast) {
           }
           else if(varsym) {
              std::vector<Statement> * cStmts = curStmts.back();
-             if(std::holds_alternative<std::monostate>(varsym->kind) ||
-                std::holds_alternative<nil_kind>(varsym->kind)) {
+             chplx::util::dout << "2228\n";
+             if(cStmts->size())
+             chplx::util::dout << "Last expr kind: " << cStmts->back().index() << std::endl;
+             if((std::holds_alternative<std::monostate>(varsym->kind) ||
+                std::holds_alternative<nil_kind>(varsym->kind)) && !isInsideZip ) {
+                  chplx::util::dout << "2231\n";
                cStmts->emplace_back(
                   std::make_shared<ScalarDeclarationExprExpression>(ScalarDeclarationExprExpression{
                      {{symbolTableRef->id}, identifier, varsym->kind, emitChapelLine(ast), varsym->kindqualifier, varsym->isConfig},{}}
@@ -1559,15 +2712,41 @@ bool ProgramTreeBuildingVisitor::enter(const uast::AstNode * ast) {
                curStmts.emplace_back(&(te->statements));
              }
              else {
+                chplx::util::dout << "Varsym literal size: " << varsym->literal.size() << std::endl;
                 if(varsym->literal.size() ||
                    ( std::holds_alternative<std::shared_ptr<array_kind>>(varsym->kind) &&
                      std::holds_alternative<std::shared_ptr<kind_node_type>>(std::get<std::shared_ptr<array_kind>>(varsym->kind)->retKind)) ) {
+                   chplx::util::dout << "Variable 2246\n";
+                   chplx::util::dout << "Kind: " << varsym->kind.index() << std::endl;
+                   chplx::util::dout << "isInsideOn: " << isInsideOn << std::endl;
+                   chplx::util::dout << "Scope : " << symbolTableRef->id << std::endl;
+                   chplx::util::dout << "Var scope: " << varsym->scopeId << std::endl;
+                   if(isInsideOn) varsym->scopeId = symbolTable.symbolTableRef->id;
                    std::visit(
                       VariableLiteralVisitor{symbolTableRef->id, identifier, *varsym, *cStmts, br, ctx, ast},
                       varsym->kind
                    );
                 }
                 else {
+                   chplx::util::dout  << "2229 Identifier: " << identifier << std::endl;
+                   chplx::util::dout << "Scope : " << symbolTableRef->id << std::endl;
+                   chplx::util::dout << "Var scope: " << varsym->scopeId << std::endl;
+                   chplx::util::dout << "OnIndex scope: " << isInsideOn << std::endl;
+                   chplx::util::dout << "Kind: " << varsym->kind.index() << std::endl;
+                   if (isInsideOn && !varsym->isIntegralKind() &&
+                       varsym->scopeId < symbolTable.symbolTableRef->id && varsym->scopeId < isInsideOn)
+                   {
+                       chplx::util::dout << "2184 Adding OnLocaleVarsUsedInExpr for: "
+                                 << identifier << std::endl;
+                       chplx::util::dout << "Scope : " << symbolTableRef->id
+                                 << std::endl;
+                       chplx::util::dout << "Var scope: " << varsym->scopeId
+                                 << std::endl;
+                       currentOnExpr->OnLocaleVarsUsedInExpr.emplace_back(
+                           VariableExpression{std::make_shared<Symbol>(
+                               Symbol{varsym->kind, identifier, {}, -1, false,
+                                   symbolTableRef->id})});
+                   }
                    std::visit(
                       VariableVisitor{symbolTableRef->id, identifier, *varsym, *cStmts, br, ctx, ast},
                       varsym->kind
@@ -1576,6 +2755,7 @@ bool ProgramTreeBuildingVisitor::enter(const uast::AstNode * ast) {
              }
           }
        }
+       chplx::util::dout << "Variable proc end\n";
     }
     break;
     case asttags::END_VarLikeDecl:
@@ -1670,6 +2850,29 @@ bool ProgramTreeBuildingVisitor::enter(const uast::AstNode * ast) {
     case asttags::Manage:
     break;
     case asttags::On:
+    {
+      std::string identifier{"on_" + emitChapelLine(ast)};
+       std::optional<Symbol> varsym =
+          symbolTable.find(symbolTableRef->id, identifier);
+
+       if(varsym.has_value() && std::holds_alternative<std::shared_ptr<func_kind>>(varsym->kind)) {
+          ++isInsideOn;
+          std::vector<Statement> * cStmts = curStmts.back();
+
+          std::shared_ptr<func_kind> & fk = std::get<std::shared_ptr<func_kind>>(varsym->kind);
+          symbolTableRef = symbolTable.lut[fk->lutId];
+
+          cStmts->emplace_back(
+             std::make_shared<OnExpression>(
+                OnExpression{{{fk->lutId}, ast, {}}, *varsym, {}, {}, {}, {}, emitChapelLine(ast)}
+          ));
+
+          auto fndecl = std::get<std::shared_ptr<OnExpression>>(cStmts->back());
+          onExprStack.push_back(fndecl);
+          curStmts.emplace_back(&(fndecl->statements));
+          currentOnExpr = onExprStack.back();
+       }
+    }
     break;
     case asttags::Serial:
     break;
@@ -1723,6 +2926,7 @@ bool ProgramTreeBuildingVisitor::enter(const uast::AstNode * ast) {
       }
 
        if(varsym.has_value() && std::holds_alternative<std::shared_ptr<func_kind>>(varsym->kind)) {
+          chplx::util::dout << "For loop identifier: " << identifier << std::endl;
           std::vector<Statement> * cStmts = curStmts.back();
 
           std::shared_ptr<func_kind> & fk = std::get<std::shared_ptr<func_kind>>(varsym->kind);
@@ -1735,6 +2939,9 @@ bool ProgramTreeBuildingVisitor::enter(const uast::AstNode * ast) {
 
           auto & fndecl = std::get<std::shared_ptr<ForLoopExpression>>(cStmts->back());
           curStmts.push_back(  &fndecl->statements );
+       }else{
+         chplx::util::dout << "for error: " << identifier << std::endl;
+         chplx::util::dout << "scope: " << symbolTableRef->id << std::endl;
        }
     }
     break;
@@ -1757,6 +2964,8 @@ bool ProgramTreeBuildingVisitor::enter(const uast::AstNode * ast) {
 
           auto & fndecl = std::get<std::shared_ptr<ForallLoopExpression>>(cStmts->back());
           curStmts.emplace_back(&(fndecl->statements));
+
+          isInsideForallTuple = 1;
        }
     }
     break;
@@ -1999,8 +3208,9 @@ bool ProgramTreeBuildingVisitor::enter(const uast::AstNode * ast) {
 
 void ProgramTreeBuildingVisitor::exit(const uast::AstNode * ast) {
    if(chplx::util::compilerDebug) {
-      std::cout << "---Exit AST Node\t" << tagToString(ast->tag()) << std::endl
+      chplx::util::dout << "---Exit AST Node\t" << tagToString(ast->tag()) << std::endl
                 << "---\tCurrent Scope\t" << symbolTable.symbolTableRef->id << std::endl
+                << "---\tCurrent Scope id \t" << symbolTableRef->id << std::endl
                 << "---\tCurrent Statement List Size\t" << curStmts.size() << std::endl
                 << "---\t" << emitChapelLine(ast);
    }
@@ -2025,6 +3235,14 @@ void ProgramTreeBuildingVisitor::exit(const uast::AstNode * ast) {
     case asttags::Domain:
     break;
     case asttags::Dot:
+    {
+    if (pushedDot)
+    {
+          curStmts.pop_back();
+          pushedDot = false;
+    }
+    specialPushedDot = false;
+    }
     break;
     case asttags::EmptyStmt:
     break;
@@ -2088,10 +3306,39 @@ void ProgramTreeBuildingVisitor::exit(const uast::AstNode * ast) {
     break;
     case asttags::For:
     case asttags::Forall:
+    isInsideForallTuple = 0;
     break;
     case asttags::Return:
     case asttags::FnCall:
-       curStmts.pop_back();
+    {
+      if(curStmts.back()->size()) {
+         chplx::util::dout << "Fn Call Pop back: " << curStmts.back()->back().index() << std::endl;
+      }
+
+      // if (curStmts.size() > 1 && std::holds_alternative<std::shared_ptr<OnExpression>>(
+      //          curStmts[curStmts.size() - 2]->back()))
+      // {
+      //       return;
+      // }
+      chplx::util::dout << "Popping \n";
+      for(auto& stmt: *curStmts.back())
+      chplx::util::dout << "before Cur stmts kind : " << stmt.index() << std::endl;
+    if(std::holds_alternative<std::shared_ptr<ForLoopExpression>>(curStmts[curStmts.size()-2]->back())) {
+          return;
+       }
+       else if(std::holds_alternative<std::shared_ptr<ForallLoopExpression>>(curStmts[curStmts.size()-2]->back())) {
+          return;
+       }
+       else if(std::holds_alternative<std::shared_ptr<CoforallLoopExpression>>(curStmts[curStmts.size()-2]->back())) {
+          return;
+       }
+       else if(std::holds_alternative<std::shared_ptr<OnExpression>>(curStmts[curStmts.size()-2]->back())) {
+          return;
+       }
+      curStmts.pop_back();
+      for(auto& stmt: *curStmts.back())
+      chplx::util::dout << "after Cur stmts kind : " << stmt.index() << std::endl;
+    }
     break;
     case asttags::OpCall:
     {
@@ -2105,6 +3352,9 @@ void ProgramTreeBuildingVisitor::exit(const uast::AstNode * ast) {
           return;
        }
        else if(std::holds_alternative<std::shared_ptr<CoforallLoopExpression>>(curStmts[curStmts.size()-2]->back())) {
+          return;
+       }
+       else if(std::holds_alternative<std::shared_ptr<OnExpression>>(curStmts[curStmts.size()-2]->back())) {
           return;
        }
        curStmts.pop_back();
@@ -2121,12 +3371,14 @@ void ProgramTreeBuildingVisitor::exit(const uast::AstNode * ast) {
     case asttags::Tuple:
     break;
     case asttags::Zip:
+    isInsideZip = false;
     break;
     case asttags::END_Call:
     break;
     case asttags::MultiDecl:
     break;
     case asttags::TupleDecl:
+    --isInsideForallTuple;
     break;
     case asttags::ForwardingDecl:
     break;
@@ -2173,6 +3425,8 @@ void ProgramTreeBuildingVisitor::exit(const uast::AstNode * ast) {
     break;
     case asttags::Block:
     {
+       if(curStmts.back()->size())
+       chplx::util::dout << "Block is inside on: " << isInsideOn << " cur scope kind: " << curStmts.back()->back().index() << std::endl;
        if (1 < curStmts.size() && std::holds_alternative<std::shared_ptr<ConditionalExpression>>( curStmts[curStmts.size()-2]->back() )) {
           curStmts.pop_back();
 
@@ -2230,6 +3484,21 @@ void ProgramTreeBuildingVisitor::exit(const uast::AstNode * ast) {
              symbolTableRef = symbolTable.lut[0];
           }
        }
+       else if (1 < curStmts.size() && std::holds_alternative<std::shared_ptr<OnExpression>>( curStmts[curStmts.size()-2]->back() )) {
+         if(isInsideOn) break; 
+         curStmts.pop_back();
+
+          std::vector<Statement> * cStmts = curStmts.back();
+          std::shared_ptr<OnExpression> & fde =
+             std::get<std::shared_ptr<OnExpression>>(cStmts->back());
+       
+          if(0 < symbolTable.lut[fde->scopeId]->parent.index() && std::holds_alternative<std::shared_ptr<SymbolTable::SymbolTableNode>>(symbolTable.lut[fde->scopeId]->parent)) {
+             symbolTableRef = std::get<std::shared_ptr<SymbolTable::SymbolTableNode>>(symbolTable.lut[fde->scopeId]->parent);
+          }
+          else {
+             symbolTableRef = symbolTable.lut[0];
+          }
+       }
     }
     break;
     case asttags::Defer:
@@ -2239,6 +3508,80 @@ void ProgramTreeBuildingVisitor::exit(const uast::AstNode * ast) {
     case asttags::Manage:
     break;
     case asttags::On:
+    {
+      // leave the OnExpression’s statements
+      if(curStmts.back() && curStmts.size())
+      for(auto& stmt: *curStmts.back())
+      chplx::util::dout << "before Cur stmts kind : " << stmt.index() << std::endl;
+      if(curStmts.back() && curStmts.size()>1)
+      curStmts.pop_back();
+      if(curStmts.back() && curStmts.size())
+      for(auto& stmt: *curStmts.back())
+      chplx::util::dout << "after Cur stmts kind : " << stmt.index() << std::endl;
+      assert(!onExprStack.empty());
+      // restore symbolTableRef to the On’s parent scope
+      auto onExpr =  onExprStack.back();
+      onExprStack.pop_back();
+      auto & parentVar = symbolTable.lut[onExpr->scopeId]->parent;
+      if (auto pNode =
+              std::get_if<std::shared_ptr<SymbolTable::SymbolTableNode>>(
+                  &parentVar))
+      {
+         symbolTableRef = *pNode;
+      }
+      else
+      {
+         symbolTableRef = symbolTable.lut[0];
+      }
+      --isInsideOn;
+
+      for (auto& var_ : onExpr->OnLocaleVarsUsedInExpr)
+      {
+         auto var = std::get<VariableExpression>(var_);
+         chplx::util::dout << "Scope of var: " << var.sym->identifier << " is "
+                   << var.sym->scopeId
+                   << "  Current scope: " << currentOnExpr->scopeId
+                   << "  symboltableref scope: "
+                   << symbolTable.symbolTableRef->id
+                   << " OnIndex scope: " << isInsideOn << std::endl;
+      }
+
+      if (!onExprStack.size())
+      {
+         currentOnExpr = nullptr;
+         assert(isInsideOn == 0);
+      }
+      else
+      {
+         auto prev_on_locale_vars = currentOnExpr->OnLocaleVarsUsedInExpr;
+         
+         currentOnExpr = onExprStack.back();
+         std::copy(prev_on_locale_vars.begin(), prev_on_locale_vars.end(),
+             std::back_inserter(currentOnExpr->OnLocaleVarsUsedInExpr));
+         chplx::util::dout
+             << "*********************************************************\n";
+         currentOnExpr->OnLocaleVarsUsedInExpr.erase(
+             std::remove_if(currentOnExpr->OnLocaleVarsUsedInExpr.begin(),
+                 currentOnExpr->OnLocaleVarsUsedInExpr.end(),
+                 [&](auto& var_) {
+                     auto var = std::get<VariableExpression>(var_);
+                     return var.sym->scopeId >= currentOnExpr->scopeId;
+                 }),
+             currentOnExpr->OnLocaleVarsUsedInExpr.end());
+         for (auto& var_ : currentOnExpr->OnLocaleVarsUsedInExpr)
+         {
+             auto var = std::get<VariableExpression>(var_);
+             chplx::util::dout << "Scope of var: " << var.sym->identifier << " is "
+                       << var.sym->scopeId
+                       << "  Current scope: " << currentOnExpr->scopeId
+                       << "  symboltableref scope: "
+                       << symbolTable.symbolTableRef->id
+                       << " OnIndex scope: " << isInsideOn << std::endl;
+         }
+         chplx::util::dout << "****************************************************"
+                      "*****\n";
+      }
+    }
     break;
     case asttags::Serial:
     break;
@@ -2274,6 +3617,12 @@ void ProgramTreeBuildingVisitor::exit(const uast::AstNode * ast) {
     {
        curStmts.pop_back();
        std::vector<Statement> * cStmts = curStmts.back();
+
+       if(cStmts->size() == 0 || !std::holds_alternative<std::shared_ptr<FunctionDeclarationExpression>>(cStmts->back()) ) {
+         if(cStmts && cStmts->size() > 0) 
+         chplx::util::dout << "3555 Stmt kind: " << cStmts->back().index() << std::endl;
+         break;
+       }
 
        std::shared_ptr<FunctionDeclarationExpression> & fde =
            std::get<std::shared_ptr<FunctionDeclarationExpression>>(cStmts->back());

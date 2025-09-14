@@ -84,3 +84,9 @@ for i in 0..2 do
 
 var H : [0..2] int = for j in 0..2 do
   j+1 + j+1;
+
+var AA : [0..2] int;
+
+forall (b,c) in zip(B,C) do
+  writeln(b,c);
+

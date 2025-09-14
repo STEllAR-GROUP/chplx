@@ -166,7 +166,8 @@ add_library(library STATIC ${chplx_library_sources} ${chplx_library_headers})
 
 set_property(TARGET library PROPERTY POSITION_INDEPENDENT_CODE ON)
 
-target_link_libraries(library PRIVATE fmt::fmt-header-only HPX::hpx)
+target_link_libraries(library PRIVATE HPX::hpx)
+target_link_libraries(library PRIVATE fmt::fmt)
 
 target_include_directories(
   library PUBLIC  $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>

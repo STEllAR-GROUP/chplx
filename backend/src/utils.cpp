@@ -12,7 +12,8 @@
 #include <string>
 #include <filesystem>
 #include <vector>
-
+#include <streambuf>
+#include <iostream>
 #include <fmt/core.h>
 
 namespace chplx::util {
@@ -40,4 +41,29 @@ std::string emitLineDirective(char const* name, int line) {
   }
   return {};
 }
+
+namespace {
+  // /dev/null-like sink
+  struct NullBuf : std::streambuf
+  {
+    int overflow(int c) override
+    {
+        return traits_type::not_eof(c);
+    }
+    std::streamsize xsputn(const char* s, std::streamsize n) override
+    {
+        return n;    // pretend we wrote it all
+    }
+  };
+  NullBuf nullbuf;
+  std::ostream nullout(&nullbuf);
+}    // namespace
+
+std::ostream& debug_ostream()
+{
+  return compilerDebug ? ::std::cout : nullout;
+}
+
+DebugStream dout;    // the global proxy object
+
 } // namespace chplx::util

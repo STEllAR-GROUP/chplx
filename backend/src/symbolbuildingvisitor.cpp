@@ -42,6 +42,7 @@ SymbolBuildingVisitor::SymbolBuildingVisitor(chpl::uast::BuilderResult const& ch
    addSymbolEntry("bool", Symbol{{bool_kind{}, std::string{"bool"}, {}, -1, false, symbolTable.symbolTableRef->id}});
    addSymbolEntry("string", Symbol{{string_kind{}, std::string{"string"}, {}, -1, false, symbolTable.symbolTableRef->id}});
    addSymbolEntry("int", Symbol{{int_kind{}, std::string{"int"}, {}, -1, false, symbolTable.symbolTableRef->id}});
+   addSymbolEntry("numLocales", Symbol{{int_kind{}, std::string{"numLocales"}, {}, 0, false, symbolTable.symbolTableRef->id}});
    addSymbolEntry("real", Symbol{{real_kind{}, std::string{"real"}, {}, -1, false, symbolTable.symbolTableRef->id}});
    addSymbolEntry("byte", Symbol{{byte_kind{}, std::string{"byte"}, {}, -1, false, symbolTable.symbolTableRef->id}});
    addSymbolEntry("complex", Symbol{{complex_kind{}, std::string{"complex"}, {}, -1, false, symbolTable.symbolTableRef->id}});
@@ -56,6 +57,21 @@ SymbolBuildingVisitor::SymbolBuildingVisitor(chpl::uast::BuilderResult const& ch
       Symbol{{std::make_shared<cxxfunc_kind>(cxxfunc_kind{{{}, "inlinecxx", {}, nil_kind{}}}), std::string{"inlinecxx"}, {}, -1, false, symbolTable.symbolTableRef->id}}
    );
 
+   addSymbolEntry("writeln",
+      Symbol{{std::make_shared<func_kind>(func_kind{{{}, "writeln", {}, nil_kind{}}}), std::string{"writeln"}, {}, -1, false, symbolTable.symbolTableRef->id}}
+   );
+
+   addSymbolEntry("here",
+       Symbol{{std::make_shared<class_kind>(class_kind{{{}, "here", {}}}),
+           std::string{"here"}, {}, -1, false,
+           symbolTable.symbolTableRef->id}});
+   addSymbolEntry("Locales",
+       Symbol{{std::make_shared<array_kind>(array_kind{{{}, "Locales", {}}}),
+           std::string{"Locales"}, {}, -1, false,
+           symbolTable.symbolTableRef->id}});
+
+   addSymbolEntry("locale",
+       Symbol{{locale_kind{}, std::string{"locale"}, {}, -1, false, symbolTable.symbolTableRef->id}});
    // incdirs - allows users to provide include paths for header files used in `inlinecxx` 
    //
    addSymbolEntry("incdirs",
@@ -109,6 +125,9 @@ SymbolBuildingVisitor::SymbolBuildingVisitor(chpl::uast::BuilderResult const& ch
    addSymbolEntry("%",
       Symbol{{std::make_shared<func_kind>(func_kind{{{}, "%", {}, {}}}), std::string{"%"}, {}, -1, false, symbolTable.symbolTableRef->id}}
    );
+   addSymbolEntry("<<",
+      Symbol{{std::make_shared<func_kind>(func_kind{{{}, "<<", {}, {}}}), std::string{"<<"}, {}, -1, false, symbolTable.symbolTableRef->id}}
+   );
    addSymbolEntry("=",
       Symbol{{std::make_shared<func_kind>(func_kind{{{}, "=", {}, {}}}), std::string{"="}, {}, -1, false, symbolTable.symbolTableRef->id}}
    );
@@ -131,7 +150,7 @@ std::string SymbolBuildingVisitor::emitChapelLine(uast::AstNode const* ast) {
 bool SymbolBuildingVisitor::enter(const uast::AstNode * ast) {
    assert(ctx != nullptr);
    if(chplx::util::compilerDebug) {
-      std::cout << "***Enter AST Node\t" << tagToString(ast->tag()) << std::endl
+      chplx::util::dout << "***Enter AST Node\t" << tagToString(ast->tag()) << std::endl
                 << "***\tCurrent Scope\t" << symbolTable.symbolTableRef->id << std::endl
                 << "***\t" << emitChapelLine(ast);
    }
@@ -234,6 +253,10 @@ bool SymbolBuildingVisitor::enter(const uast::AstNode * ast) {
     }
     break;
     case asttags::Dot:
+    {
+      // const std::string field_name  = dynamic_cast<const Dot *>(ast)->field().str();
+      // const std::string class_name = dynamic_cast<Identifier const*>(dynamic_cast<const Dot *>(ast)->receiver())->name().c_str();
+    }
     break;
     case asttags::EmptyStmt:
     break;
@@ -246,6 +269,8 @@ bool SymbolBuildingVisitor::enter(const uast::AstNode * ast) {
     case asttags::Identifier:
     {
        std::string identifier_str{dynamic_cast<Identifier const*>(ast)->name().c_str()};
+
+       chplx::util::dout << "Identifier: " << identifier_str << std::endl;
 
        if(sym && !std::holds_alternative<std::monostate>(sym->get().kind)) {
           const std::size_t lutId = sym->get().scopeId;
@@ -260,6 +285,9 @@ bool SymbolBuildingVisitor::enter(const uast::AstNode * ast) {
              if(fsym) {
                 std::shared_ptr<array_kind> & symref =
                    std::get<std::shared_ptr<array_kind>>(sym->get().kind);
+                if(fsym->identifier == identifier_str && identifier_str == "numLocales"){
+                  fsym->scopeId = symbolTable.symbolTableRef->id;
+                }
 
                 auto & domk = std::get<std::shared_ptr<domain_kind>>(symref->args.back().kind);
                 if(0 < domk->args.size() &&
@@ -345,6 +373,8 @@ bool SymbolBuildingVisitor::enter(const uast::AstNode * ast) {
                 sym->get().kind = std::holds_alternative<std::shared_ptr<func_kind>>(fsym->kind) ?
                    std::get<std::shared_ptr<func_kind>>(fsym->kind)->retKind : fsym->kind;
                 sym->get().scopeId = symbolTable.symbolTableRef->id;
+                chplx::util::dout << "373 Scope ID: " << sym->get().scopeId
+                          << " SymbolTableRef ID: " << symbolTable.symbolTableRef->id << std::endl;
              }
           }
        }
@@ -352,12 +382,14 @@ bool SymbolBuildingVisitor::enter(const uast::AstNode * ast) {
           std::optional<Symbol> fsym{};
           symbolTable.find(identifier_str, fsym);
           if(fsym.has_value()) {
+            chplx::util::dout << "383 Scope ID: " << sym->get().scopeId
+                          << " SymbolTableRef ID: " << symbolTable.symbolTableRef->id << std::endl;
              sym->get().kind = fsym->kind;
              sym->get().scopeId = symbolTable.symbolTableRef->id;
           }
        }
 /*       else {
-std::cout << "ELSE\t" << identifier_str << std::endl;
+chplx::util::dout << "ELSE\t" << identifier_str << std::endl;
        }
 */
     }
@@ -751,6 +783,8 @@ std::cout << "ELSE\t" << identifier_str << std::endl;
         )) {
            const FnCall* fc = dynamic_cast<const FnCall*>(ast);
            std::string identifier{dynamic_cast<const Identifier*>(fc->calledExpression())->name().c_str()};
+           chplx::util::dout << "FnCall Identifier:\t" << identifier << std::endl;
+           chplx::util::dout << "sym->get().kind:\t" << sym->get().kind.index() << std::endl;
 
            auto rsym =
               symbolTable.findPrefix(symbolTable.symbolTableRef->id, identifier);
@@ -769,6 +803,7 @@ std::cout << "ELSE\t" << identifier_str << std::endl;
 
               // assign variable the return value of the function...
               //
+              chplx::util::dout << "Itr kind "<<itr->second.kind.index()<<std::endl;
               if(itrstr.size() >= identifier.size() &&
                  itrstr == identifier &&
                  0 < itr->second.kind.index() && 
@@ -776,10 +811,12 @@ std::cout << "ELSE\t" << identifier_str << std::endl;
                  !std::holds_alternative<std::shared_ptr<tuple_kind>>(sym->get().kind) &&
                  std::holds_alternative<std::shared_ptr<func_kind>>(itr->second.kind)
               ) {
+               chplx::util::dout << "805\n";
                  sym->get().kind = std::get<std::shared_ptr<func_kind>>(itr->second.kind)->retKind;
                  break;
               }
               else if(std::holds_alternative<std::shared_ptr<array_kind>>(sym->get().kind)) {
+               chplx::util::dout << "810\n";
                  std::shared_ptr<array_kind> & symref =
                     std::get<std::shared_ptr<array_kind>>(sym->get().kind);
 
@@ -805,7 +842,10 @@ std::cout << "ELSE\t" << identifier_str << std::endl;
                  break;
               }
               else if(std::holds_alternative<std::monostate>(sym->get().kind) &&
-                      std::holds_alternative<std::shared_ptr<tuple_kind>>(itr->second.kind)) {
+                      std::holds_alternative<std::shared_ptr<tuple_kind>>(itr->second.kind)
+                     && std::holds_alternative<std::shared_ptr<kind_node_type>>(
+                        std::get<std::shared_ptr<tuple_kind>>(itr->second.kind)->retKind)) {
+               chplx::util::dout << "837\n";
                  assert(0 < fc->numActuals());
                  const AstNode* idx = fc->actual(0);
                  assert(idx->tag() == asttags::IntLiteral);
@@ -829,6 +869,7 @@ std::cout << "ELSE\t" << identifier_str << std::endl;
            }
 
            if(std::holds_alternative<nil_kind>(sym->get().kind)) {
+               chplx::util::dout << "860\n";
               sym->get().kind = expr_kind{};
            }
         }
@@ -986,6 +1027,9 @@ std::cout << "ELSE\t" << identifier_str << std::endl;
           {}, kindqual, cfg, symbolTable.symbolTableRef->id
        }});
 
+       chplx::util::dout << "Variable Identifier:\t" << std::string{dynamic_cast<NamedDecl const*>(ast)->name().c_str()} 
+        << " Kindqual: " << kindqual << std::endl;
+
        sym.reset();
        sym = symstack.back();
        symnode = const_cast<uast::AstNode*>(ast);
@@ -1111,7 +1155,9 @@ std::cout << "ELSE\t" << identifier_str << std::endl;
             std::holds_alternative<std::shared_ptr<func_kind>>(sym->get().kind);
          const bool is_if = is_func && 
             std::get<std::shared_ptr<func_kind>>(sym->get().kind)->symbolTableSignature.find("if") != std::string::npos;
-         const bool is_same_scope =
+         const bool is_else = is_func && 
+            std::get<std::shared_ptr<func_kind>>(sym->get().kind)->symbolTableSignature.find("else") != std::string::npos;
+         const bool is_same_scope = symnode != nullptr &&
             emitChapelLine(symnode) == emitChapelLine(ast);
          if(is_func && !is_if && is_same_scope) {
              std::shared_ptr<func_kind> & fk =
@@ -1164,13 +1210,7 @@ std::cout << "ELSE\t" << identifier_str << std::endl;
             symbolTable.symbolTableRef->parent = prevSymbolTableRef;
             symnode = const_cast<uast::AstNode*>(ast);
          }
-/*
-         else {
-std::cout << "BLOCK HERE" << std::endl;
-         }
-*/
-       }
-       else {
+          else if(is_func && is_else && !is_same_scope) {
           symstack.emplace_back(
              Symbol{{
                 std::make_shared<func_kind>(func_kind{{
@@ -1195,7 +1235,14 @@ std::cout << "BLOCK HERE" << std::endl;
 
           symbolTable.parentSymbolTableId = parScope;
           symbolTable.symbolTableRef->parent = prevSymbolTableRef;
+         }
+/*
+         else {
+chplx::util::dout << "BLOCK HERE" << std::endl;
+         }
+*/
        }
+      
     }
     break;
     case asttags::Defer:
@@ -1205,6 +1252,39 @@ std::cout << "BLOCK HERE" << std::endl;
     case asttags::Manage:
     break;
     case asttags::On:
+    {
+        symstack.emplace_back(
+          Symbol{{
+             std::make_shared<func_kind>(func_kind{{
+                symbolTable.symbolTableRef->id, {}, {}, {}}}),
+             std::string{"on_" + emitChapelLine(ast)},
+             {}, -1, false, symbolTable.symbolTableRef->id
+          }});
+
+       std::shared_ptr<SymbolTable::SymbolTableNode> prevSymbolTableRef = symbolTable.symbolTableRef;
+       const std::size_t parScope = symbolTable.symbolTableRef->id;
+
+       chplx::util::dout << "On enter scope before: " << parScope << std::endl;
+
+       symbolTable.pushScope();
+       symbolTable.parentSymbolTableId = parScope;
+       symbolTable.symbolTableRef->parent = prevSymbolTableRef;
+       
+       sym.reset();
+       sym = symstack.back();
+
+       std::shared_ptr<func_kind> & fk = 
+          std::get<std::shared_ptr<func_kind>>(sym->get().kind);
+
+       fk->symbolTableSignature = sym->get().identifier;
+       // func_kind.lutId = the scope where the function's symboltable references
+       //
+       fk->lutId = symbolTable.symbolTableRef->id;
+
+       symnode = const_cast<uast::AstNode*>(ast);
+
+       chplx::util::dout << "On enter scope after: " << symbolTable.symbolTableRef->id << std::endl;
+    }
     break;
     case asttags::Serial:
     break;
@@ -1322,9 +1402,9 @@ std::cout << "BLOCK HERE" << std::endl;
            && std::holds_alternative<std::shared_ptr<array_kind>>(
                   sym->get().kind);    // whose kind is still array
 
-       if (std::holds_alternative<std::shared_ptr<array_kind>>(
-               sym->get().kind) &&
-           isArrayInitExpr)
+       chplx::util::dout << "For : isArrayInitExpr: " << isArrayInitExpr << std::endl;
+
+       if (isArrayInitExpr)
        {
           // This is a for-loop expression used to initialize an array
           std::shared_ptr<array_kind>& arrk =
@@ -1630,7 +1710,7 @@ std::cout << "BLOCK HERE" << std::endl;
 
 void SymbolBuildingVisitor::exit(const uast::AstNode * ast) {
    if(chplx::util::compilerDebug) {
-      std::cout << "---Exit AST Node\t" << tagToString(ast->tag()) << std::endl
+      chplx::util::dout << "---Exit AST Node\t" << tagToString(ast->tag()) << std::endl
                 << "---\tCurrent Scope\t" << symbolTable.symbolTableRef->id << std::endl
                 << "---\t" << emitChapelLine(ast);
    }
@@ -1816,6 +1896,28 @@ void SymbolBuildingVisitor::exit(const uast::AstNode * ast) {
     case asttags::Manage:
     break;
     case asttags::On:
+    {
+    if (std::holds_alternative<std::shared_ptr<func_kind>>(sym->get().kind))
+    {
+            std::shared_ptr<func_kind>& fk =
+                std::get<std::shared_ptr<func_kind>>(sym->get().kind);
+
+            symbolTable.addEntry(
+                sym->get().scopeId, fk->symbolTableSignature, *sym);
+    }
+
+          sym.reset();
+          symnode = nullptr;
+
+          chplx::util::dout << "On exit scope before : " << symbolTable.symbolTableRef->id << std::endl;
+
+          symbolTable.popScope();
+
+          chplx::util::dout << "On exit scope after : " << symbolTable.symbolTableRef->id << std::endl;
+
+          symstack.pop_back();
+          sym = symstack.back();
+    }
     break;
     case asttags::Serial:
     break;
@@ -1852,6 +1954,7 @@ void SymbolBuildingVisitor::exit(const uast::AstNode * ast) {
     break;
     case asttags::Block:
     {
+      chplx::util::dout <<  sym->get().identifier << std::endl;
        if(sym) {
           if(std::holds_alternative<std::shared_ptr<func_kind>>(sym->get().kind)) {
              auto & fk = std::get<std::shared_ptr<func_kind>>(sym->get().kind);
@@ -1873,22 +1976,22 @@ void SymbolBuildingVisitor::exit(const uast::AstNode * ast) {
              //symbolTable.addEntry(sym->get().scopeId, fk->symbolTableSignature, *sym);
 
              const std::size_t prevScope = sym->get().scopeId; 
-//std::cout << "BEFORE BLCOK IDS\t" << symbolTable.symbolTableRef->id << ' ' << prevScope << std::endl;
+//chplx::util::dout << "BEFORE BLCOK IDS\t" << symbolTable.symbolTableRef->id << ' ' << prevScope << std::endl;
 //                sym.reset();
 //                symnode = nullptr;
 //                sym = symstack.back();
 //               symbolTable.popScope();
-//std::cout << "AFTER BLCOK IDS\t" << symbolTable.symbolTableRef->id << ' ' << sym->get().scopeId << std::endl;
+//chplx::util::dout << "AFTER BLCOK IDS\t" << symbolTable.symbolTableRef->id << ' ' << sym->get().scopeId << std::endl;
 
 /*
              if(2 < symstack.size()) {
-std::cout << "POP BLOCK HERE1" << std::endl;
+chplx::util::dout << "POP BLOCK HERE1" << std::endl;
                symbolTable.popScope();
                symstack.pop_back();
                sym = symstack.back();
              }
              else if(1 < symstack.size()) {
-std::cout << "POP BLOCK HERE2" << std::endl;
+chplx::util::dout << "POP BLOCK HERE2" << std::endl;
                symbolTable.popScope();
                symstack.pop_back();
              }

@@ -53,7 +53,7 @@ R"(chplx -help:
              -o: output path (default : $CWD)
 )";
 
-   std::cout << helpstring << std::flush;
+   chplx::util::dout << helpstring << std::flush;
 }
 
 int main(int argc, char ** argv) {
@@ -98,7 +98,7 @@ int main(int argc, char ** argv) {
             }
          break;
          default:
-            std::cout << "chplx: unknown command line option: -" << opt << std::endl << std::flush;
+            chplx::util::dout << "chplx: unknown command line option: -" << opt << std::endl << std::flush;
             [[fallthrough]];
          case 'h':
             usage();
@@ -181,22 +181,14 @@ int main(int argc, char ** argv) {
 
       chpl::ast::visitors::hpx::SymbolBuildingVisitor sbv{br, ctx, ofilePath};
       AstNode const* ast = static_cast<AstNode const*>(mod);
-      if(chplx::util::compilerDebug) {
-         std::cout << "[SymbolBuildingVisitor] Enter" << std::endl;
-      }
+      chplx::util::dout << "[SymbolBuildingVisitor] Enter" << std::endl;
       ast->traverse(sbv);
-      if(chplx::util::compilerDebug) {
-         std::cout << "[SymbolBuildingVisitor] Exit" << std::endl;
-      }
+      chplx::util::dout << "[SymbolBuildingVisitor] Exit" << std::endl;
 
       chplx::ast::visitors::hpx::ProgramTreeBuildingVisitor pbv{{}, nullptr, sbv.symbolTable.symbolTableRef, br, ctx, sbv.symbolTable, program, { &(program.statements) }, {}};
-      if(chplx::util::compilerDebug) {
-         std::cout << "[ProgramTreeBuildingVisitor] Enter" << std::endl;
-      }
+      chplx::util::dout << "[ProgramTreeBuildingVisitor] Enter" << std::endl;
       ast->traverse(pbv);
-      if(chplx::util::compilerDebug) {
-         std::cout << "[ProgramTreeBuildingVisitor] Exit" << std::endl;
-      }
+      chplx::util::dout << "[ProgramTreeBuildingVisitor] Exit" << std::endl;
 
       chpl::ast::visitors::hpx::CodegenVisitor cgv{sbv.symbolTable, sbv.configVars, program, br, ofilePath, chplFilePth.filename().string(), ctx};
       cgv.indent += 1;
