@@ -48,7 +48,12 @@ endif()
 link_directories(${LD_LIBRARY_PATH})
 
 add_definitions(${LLVM_DEFINITIONS})
-llvm_map_components_to_libnames(llvm_libs support core irreader)
+if(TARGET LLVM)
+  # Prefer the shared LLVM target when available to avoid static archive ABI mismatches.
+  set(llvm_libs LLVM)
+else()
+  llvm_map_components_to_libnames(llvm_libs support core irreader)
+endif()
 
 set(chplx_sources
     src/symboltypes.cpp src/symbolbuildingvisitor.cpp src/programtree.cpp
