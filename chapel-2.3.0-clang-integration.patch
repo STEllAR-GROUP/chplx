@@ -1,0 +1,62 @@
+diff --git a/frontend/lib/util/clang-integration.cpp b/frontend/lib/util/clang-integration.cpp
+index e379d78d249..6c4e0dc1688 100644
+--- a/frontend/lib/util/clang-integration.cpp
++++ b/frontend/lib/util/clang-integration.cpp
+@@ -43,6 +43,7 @@
+ 
+ #include "llvm/Config/llvm-config.h"
+ #include "llvm/Support/TargetSelect.h"
++#include "llvm/Support/VirtualFileSystem.h"
+ 
+ #if LLVM_VERSION_MAJOR >= 16
+ #include "llvm/TargetParser/Host.h"
+@@ -282,11 +283,22 @@ createClangPrecompiledHeader(Context* context, ID externBlockId) {
+ 
+     auto diagOptions = wrapCreateAndPopulateDiagOpts(cc1argsCstrs);
+     auto diagClient = new clang::TextDiagnosticBuffer();
+-    auto clangDiags =
++    clang::DiagnosticsEngine* clangDiags = nullptr;
++#if LLVM_VERSION_MAJOR >= 19
++    auto vfs = llvm::vfs::getRealFileSystem();
++    Clang->createDiagnostics(*vfs,
++                             diagOptions.release(),
++                             diagClient,
++                             /* owned */ true);
++    clangDiags = &Clang->getDiagnostics();
++#else
++    auto clangDiagsRef =
+       clang::CompilerInstance::createDiagnostics(diagOptions.release(),
+                                                  diagClient,
+                                                  /* owned */ true);
+-    Clang->setDiagnostics(&*clangDiags);
++    Clang->setDiagnostics(&*clangDiagsRef);
++    clangDiags = &*clangDiagsRef;
++#endif
+ 
+     // replace current compiler invocation with one including args and diags
+     bool success = clang::CompilerInvocation::CreateFromArgs(
+@@ -380,11 +392,22 @@ precompiledHeaderContainsNameQuery(Context* context,
+     auto diagOptions = wrapCreateAndPopulateDiagOpts(cc1argsCstrs);
+     auto diagClient = new clang::TextDiagnosticPrinter(llvm::errs(),
+                                                        &*diagOptions);
+-    auto clangDiags =
++    clang::DiagnosticsEngine* clangDiags = nullptr;
++#if LLVM_VERSION_MAJOR >= 19
++    auto vfs = llvm::vfs::getRealFileSystem();
++    Clang->createDiagnostics(*vfs,
++                             diagOptions.release(),
++                             diagClient,
++                             /* owned */ true);
++    clangDiags = &Clang->getDiagnostics();
++#else
++    auto clangDiagsRef =
+       clang::CompilerInstance::createDiagnostics(diagOptions.release(),
+                                                  diagClient,
+                                                  /* owned */ true);
+-    Clang->setDiagnostics(&*clangDiags);
++    Clang->setDiagnostics(&*clangDiagsRef);
++    clangDiags = &*clangDiagsRef;
++#endif
+ 
+     bool success =
+       clang::CompilerInvocation::CreateFromArgs(Clang->getInvocation(),
