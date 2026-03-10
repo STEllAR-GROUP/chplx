@@ -48,7 +48,12 @@ endif()
 link_directories(${LD_LIBRARY_PATH})
 
 add_definitions(${LLVM_DEFINITIONS})
-llvm_map_components_to_libnames(llvm_libs support core irreader)
+if(TARGET LLVM)
+  # Prefer the shared LLVM target when available to avoid static archive ABI mismatches.
+  set(llvm_libs LLVM)
+else()
+  llvm_map_components_to_libnames(llvm_libs support core irreader)
+endif()
 
 set(chplx_sources
     src/symboltypes.cpp src/symbolbuildingvisitor.cpp src/programtree.cpp
@@ -85,7 +90,12 @@ target_include_directories(
 target_link_directories(
   chplx PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/../build/frontend/lib
 )
-target_link_libraries(chplx PRIVATE ChplFrontend ${llvm_libs})
+if(TARGET ChplFrontendShared)
+  set(CHPL_FRONTEND_TARGET ChplFrontendShared)
+else()
+  set(CHPL_FRONTEND_TARGET ChplFrontend)
+endif()
+target_link_libraries(chplx PRIVATE ${CHPL_FRONTEND_TARGET} ${llvm_libs})
 target_link_libraries(chplx PRIVATE fmt::fmt)
 
 if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
