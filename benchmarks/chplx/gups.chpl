@@ -2,7 +2,7 @@ proc getNextRandom(x : int) : int {
    var poly = 0;
    inlinecxx("{} = 0x7;", poly);
    var hirandbit = 0;
-   inlinecxx("{} = 0x1 << (64-1);", hirandbit);
+   inlinecxx("{} = 0x1ULL << (64-1);", hirandbit);
    inlinecxx("{} = ({} << 1) ^ ( ({} & {}) ? {} : 0);", x, x, x, hirandbit, poly);
    return x;
 }
@@ -18,7 +18,7 @@ proc computeProblemSize(numArrays : int, physicalMemoryBytes : int, memRatio : i
     var lgProblemSize = 0;
     inlinecxx("{} = std::log2(numIndices);", lgProblemSize);
 
-    if (returnLog2) {
+      if (returnLog2 == false) {
       //numIndices = 2**lgProblemSize;
       inlinecxx("{} = std::pow(2,{});", numIndices, lgProblemSize);
       inlinecxx("if({} * {} <= {})", numIndices, bytesPerIndex, memoryTarget);
@@ -36,7 +36,9 @@ proc computeProblemSize(numArrays : int, physicalMemoryBytes : int, memRatio : i
 proc computeM2Values(m2 : [] int, count : int) :bool {
    var nextval = 0;
    inlinecxx("{} = 0x1;", nextval);
-   for i in 0..count {
+   var count_range : int;
+   count_range = count - 1;
+   for i in 0..count_range {
       m2[i] = nextval;
       nextval = getNextRandom(nextval);
       nextval = getNextRandom(nextval);
@@ -49,16 +51,19 @@ proc getNthRandom(N : int, m2 : [] int, m2count : int) {
    var ran = 0;
    inlinecxx("{} = 0x2;", ran);
    var i = 0;
-   inlinecxx("{} = std::ceil(std::log2(static_cast<double>({})));", i, N);
+   inlinecxx("{} = std::ceil(std::log2(static_cast<double>(N)));", i);
    var val = 0;
    var J = 0;
-   for j in 0..i {
-      J = i-j;
-      for k in 1..m2count {
-         inlinecxx("if (({} >> ({}-1)) & 1) {} ^= {} [ ({}-1) ];", ran, k, val, m2, k); 
+   var I = i-1;
+   for j in 0..I {
+      J = i - j - 1;
+      for k in 0..<m2count {
+         // if ((ran >> k) & 1) then val ^= m2[k];
+         inlinecxx("if ((({} >> {}) & 1) != 0) {} ^= {} [ {} ];", ran, k, val, m2, k);
       }
       ran = val;
-      inlinecxx("if(({} >> {}) & 1) {} = getNextRandom({});", N, J, ran, ran);
+      // if ((N >> J) & 1) then ran = getNextRandom(ran);
+      inlinecxx("if ((({} >> {}) & 1) != 0) {} = getNextRandom({});", N, J, ran, ran);
    }
 
    return ran;
@@ -67,7 +72,8 @@ proc getNthRandom(N : int, m2 : [] int, m2count : int) {
 proc RAStream(vals : [] int, numvals : int, m2 : [] int, m2count : int) {
 
    var val = getNthRandom(2, m2, m2count);
-   for i in 0..numvals {
+   var NUMvals = numvals - 1;
+   for i in 0..NUMvals {
       val = getNextRandom(val);
       vals[i] = val;
    }
@@ -80,39 +86,42 @@ var memoryTarget_ = physicalMemory / memRatio;
 var bytesPerType = 4;
 inlinecxx("{} = sizeof(decltype({}));",bytesPerType, memoryTarget_);
 param numTables = 1;
-
-var m2 : [0..randWidth] int;
+var m2range : int;
+m2range = randWidth - 1;
+var m2 : [0..m2range] int;
 computeM2Values(m2, randWidth);
 
-var SZ = 0;
-inlinecxx("{} = {} / {};", SZ, memoryTarget_ , bytesPerType);
+// Compute problem sizes
+var n = 0;
+n = computeProblemSize(numTables, physicalMemory, memRatio, true);
 var N_U = 0;
-var n = 1;
-n = computeProblemSize(numTables, physicalMemory, memRatio, false);
-inlinecxx("{} = {}+2;", N_U, n);
+inlinecxx("{} = static_cast<int>(std::pow(2, (n + 2)));", N_U);
+var N_U_idx : int;
+N_U_idx= N_U - 1;
+var SZ = 0; // Size of array
+inlinecxx("{} = static_cast<int>(std::pow(2, (n)));", SZ);
 
-var z : int;
-z = N_U;
-var randval : [0..z] int;
 
-var indexMask = z - 1;
+var randval : [0..N_U_idx] int;
 
-var T : [0..SZ] int;
+var indexMask : int;
+indexMask = SZ - 1;
+var T : [0..indexMask] int;
 
-for i in 0..SZ {
+for i in 0..indexMask {
   T[i] = i;
 }
 
 inlinecxx("hpx::chrono::high_resolution_timer gups;");
 
-RAStream(randval, z, m2, randWidth);
-forall r in 0..z {
+RAStream(randval, N_U, m2, randWidth);
+forall r in 0..N_U_idx {
    inlinecxx("{} [ {} [ {} ] & {} ] ^= {} [ {} ];", T, randval, r, indexMask, randval, r);
 }
 
-inlinecxx("auto elapsed = gups.elapsed();");
-inlinecxx("auto nprocs = hpx::resource::get_num_threads();");
-inlinecxx("auto t0 = elapsed / ((double)nprocs);");
-inlinecxx("auto nupdates = {} * nprocs * 1;", z);
-inlinecxx("auto gups_val = ((double)nupdates) / (t0 / 1.0e9);");
-inlinecxx("std::cout << hpx::resource::get_num_threads() << \",\" << elapsed << \",\" << gups_val << \",\" << physicalMemory << \",\" << memRatio << \",\" << n << std::endl;");
+// Measure time and compute performance
+inlinecxx("auto elapsed_sec = gups.elapsed();");
+inlinecxx("auto t0 = elapsed_sec;");
+inlinecxx("auto nupdates = {};", N_U);
+inlinecxx("auto gups_val = ((double)nupdates) / t0;");
+inlinecxx("std::cout << hpx::resource::get_num_threads() << \",\" << t0 << \",\" << gups_val << \",\" << physicalMemory << \",\" << memRatio << \",\" << n << std::endl;");
